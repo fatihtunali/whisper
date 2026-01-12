@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -16,8 +16,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList, Message, Contact } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { useAuth } from '../context/AuthContext';
+import { messagingService } from '../services/MessagingService';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
-import { formatTime, getInitials, generateId } from '../utils/helpers';
+import { formatTime, getInitials } from '../utils/helpers';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type ChatRouteProp = RouteProp<RootStackParamList, 'Chat'>;
@@ -26,7 +27,7 @@ export default function ChatScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<ChatRouteProp>();
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, isConnected } = useAuth();
   const { contactId } = route.params;
 
   const [messages, setMessages] = useState<Message[]>([]);
@@ -36,6 +37,32 @@ export default function ChatScreen() {
 
   useEffect(() => {
     loadData();
+  }, [contactId]);
+
+  // Set up message handlers
+  useEffect(() => {
+    // Handle incoming messages
+    const handleIncomingMessage = (message: Message, msgContact: Contact) => {
+      if (msgContact.whisperId === contactId) {
+        setMessages(prev => [message, ...prev]);
+      }
+    };
+
+    // Handle status updates for our sent messages
+    const handleStatusUpdate = async (messageId: string, status: Message['status']) => {
+      setMessages(prev =>
+        prev.map(m => (m.id === messageId ? { ...m, status } : m))
+      );
+      await secureStorage.updateMessageStatus(contactId, messageId, status);
+    };
+
+    messagingService.setOnMessageReceived(handleIncomingMessage);
+    messagingService.setOnStatusUpdate(handleStatusUpdate);
+
+    return () => {
+      messagingService.setOnMessageReceived(null);
+      messagingService.setOnStatusUpdate(null);
+    };
   }, [contactId]);
 
   const loadData = async () => {
@@ -97,6 +124,8 @@ export default function ChatScreen() {
       // Mark each visible message as read
       for (const msg of unreadFromOthers) {
         await secureStorage.updateMessageStatus(currentContactId, msg.id, 'read');
+        // Send read receipt to the sender via server
+        messagingService.sendDeliveryReceipt(msg.senderId, msg.id, 'read');
       }
 
       // Update unread count
@@ -114,38 +143,19 @@ export default function ChatScreen() {
   const sendMessage = async () => {
     if (!inputText.trim() || !user || !contact) return;
 
-    const newMessage: Message = {
-      id: generateId(),
-      conversationId: contactId,
-      senderId: user.whisperId,
-      content: inputText.trim(),
-      timestamp: Date.now(),
-      status: 'sending',
-    };
-
-    // Optimistically add message
-    setMessages(prev => [newMessage, ...prev]);
+    const content = inputText.trim();
     setInputText('');
 
-    // Save to storage
-    await secureStorage.addMessage(contactId, newMessage);
+    try {
+      // Send via messaging service (handles encryption and WebSocket)
+      const sentMessage = await messagingService.sendMessage(contact, content);
 
-    // Update conversation
-    await secureStorage.updateConversation(contactId, {
-      lastMessage: newMessage,
-      updatedAt: Date.now(),
-    });
-
-    // TODO: Send via WebSocket to server
-    // For now, mark as sent after a delay
-    setTimeout(async () => {
-      await secureStorage.updateMessageStatus(contactId, newMessage.id, 'sent');
-      setMessages(prev =>
-        prev.map(m =>
-          m.id === newMessage.id ? { ...m, status: 'sent' } : m
-        )
-      );
-    }, 500);
+      // Add to local state
+      setMessages(prev => [sentMessage, ...prev]);
+    } catch (error) {
+      console.error('Failed to send message:', error);
+      // Could show an error toast here
+    }
   };
 
   const displayName = contact?.nickname || contact?.username || contactId;
@@ -198,7 +208,9 @@ export default function ChatScreen() {
             <Text style={styles.headerName} numberOfLines={1}>
               {displayName}
             </Text>
-            <Text style={styles.headerStatus}>Encrypted</Text>
+            <Text style={[styles.headerStatus, !isConnected && styles.headerStatusOffline]}>
+              {isConnected ? 'Encrypted' : 'Offline'}
+            </Text>
           </View>
         </View>
         <View style={styles.headerSpacer} />
@@ -303,6 +315,9 @@ const styles = StyleSheet.create({
   headerStatus: {
     fontSize: fontSize.xs,
     color: colors.success,
+  },
+  headerStatusOffline: {
+    color: colors.textMuted,
   },
   headerSpacer: {
     width: 40,

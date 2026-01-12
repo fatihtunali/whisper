@@ -2,11 +2,13 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { LocalUser } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { cryptoService } from '../crypto/CryptoService';
+import { messagingService } from '../services/MessagingService';
 
 interface AuthContextType {
   user: LocalUser | null;
   isLoading: boolean;
   isAuthenticated: boolean;
+  isConnected: boolean;
   createAccount: (username?: string) => Promise<{ user: LocalUser; seedPhrase: string[] }>;
   recoverAccount: (seedPhrase: string[]) => Promise<LocalUser>;
   logout: () => Promise<void>;
@@ -18,10 +20,29 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<LocalUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
 
   useEffect(() => {
     loadUser();
+
+    // Set up connection status handler
+    messagingService.setOnConnectionChange((connected) => {
+      setIsConnected(connected);
+      console.log('[AuthContext] Connection status:', connected);
+    });
+
+    return () => {
+      messagingService.setOnConnectionChange(null);
+    };
   }, []);
+
+  // Connect to messaging service when user is loaded
+  useEffect(() => {
+    if (user) {
+      console.log('[AuthContext] Connecting to messaging service...');
+      messagingService.connect(user);
+    }
+  }, [user]);
 
   const loadUser = async () => {
     try {
@@ -83,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    messagingService.disconnect();
     await secureStorage.clearAll();
     setUser(null);
   };
@@ -101,6 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         isLoading,
         isAuthenticated: !!user,
+        isConnected,
         createAccount,
         recoverAccount,
         logout,
