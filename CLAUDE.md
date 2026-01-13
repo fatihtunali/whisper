@@ -125,9 +125,30 @@ Public endpoints:
 ## Deployment
 
 - **Server IP**: 142.93.136.228 (sarjmobile.com)
-- **Port**: 3031 (HTTP + WebSocket on same port)
 - **SSL**: Nginx reverse proxy with Let's Encrypt
 - **Process Manager**: PM2
+
+### Server Paths on Production
+- **Server (WebSocket)**: `/home/whisper/whisper/server` (port 3031)
+- **Website**: `/home/whisper/sarjmobile` (port 3021)
+
+### Deployment Commands
+```bash
+# Server deployment
+ssh root@142.93.136.228
+cd /home/whisper/whisper/server
+git pull
+npm install
+npm run build
+pm2 restart whisper-server
+
+# Website deployment
+cd /home/whisper/sarjmobile
+git pull
+npm install
+npm run build
+pm2 restart sarjmobile  # or restart by finding process on port 3021
+```
 
 ## Security Model
 
