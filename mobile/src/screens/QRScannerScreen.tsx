@@ -14,6 +14,7 @@ import { RootStackParamList, Contact } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { parseQRData } from '../utils/helpers';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale } from '../utils/responsive';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -23,7 +24,16 @@ export default function QRScannerScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
 
-  const handleBarCodeScanned = async ({ data }: { data: string }) => {
+  const navigateBack = () => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    } else {
+      navigation.navigate('MainTabs');
+    }
+  };
+
+  const handleBarCodeScanned = async ({ type, data }: { type: string; data: string }) => {
+    console.log('QR Scanned!', { type, data });
     if (scanned) return;
     setScanned(true);
 
@@ -40,7 +50,7 @@ export default function QRScannerScreen() {
     const existing = await secureStorage.getContact(parsed.whisperId);
     if (existing) {
       Alert.alert('Contact Exists', 'This contact is already in your list.', [
-        { text: 'OK', onPress: () => navigation.goBack() },
+        { text: 'OK', onPress: () => navigateBack() },
       ]);
       return;
     }
@@ -60,8 +70,8 @@ export default function QRScannerScreen() {
               addedAt: Date.now(),
             };
             await secureStorage.addContact(contact);
-            Alert.alert('Success', 'Contact added successfully', [
-              { text: 'OK', onPress: () => navigation.goBack() },
+            Alert.alert('Success', 'Contact added! Start chatting now.', [
+              { text: 'OK', onPress: () => navigation.replace('Chat', { contactId: contact.whisperId }) },
             ]);
           },
         },
@@ -83,7 +93,7 @@ export default function QRScannerScreen() {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
         <View style={styles.header}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
+          <TouchableOpacity onPress={navigateBack}>
             <Text style={styles.closeButton}>✕</Text>
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Scan QR Code</Text>
@@ -103,7 +113,7 @@ export default function QRScannerScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
+        <TouchableOpacity onPress={navigateBack}>
           <Text style={styles.closeButton}>✕</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Scan QR Code</Text>
@@ -113,14 +123,15 @@ export default function QRScannerScreen() {
       {/* Camera */}
       <View style={styles.cameraContainer}>
         <CameraView
-          style={styles.camera}
+          style={StyleSheet.absoluteFillObject}
+          facing="back"
           barcodeScannerSettings={{
             barcodeTypes: ['qr'],
           }}
           onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
         />
         {/* Overlay with absolute positioning */}
-        <View style={styles.overlay}>
+        <View style={styles.overlay} pointerEvents="none">
           <View style={styles.scanArea}>
             <View style={[styles.corner, styles.cornerTL]} />
             <View style={[styles.corner, styles.cornerTR]} />
@@ -164,7 +175,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   headerSpacer: {
-    width: 30,
+    width: moderateScale(30),
   },
   centered: {
     flex: 1,
@@ -203,15 +214,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   scanArea: {
-    width: 250,
-    height: 250,
+    width: moderateScale(250),
+    height: moderateScale(250),
     backgroundColor: 'transparent',
     position: 'relative',
   },
   corner: {
     position: 'absolute',
-    width: 30,
-    height: 30,
+    width: moderateScale(30),
+    height: moderateScale(30),
     borderColor: colors.primary,
   },
   cornerTL: {

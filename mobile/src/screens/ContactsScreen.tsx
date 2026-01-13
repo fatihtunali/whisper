@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList, Contact } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale, scaleFontSize } from '../utils/responsive';
 import { getInitials } from '../utils/helpers';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -173,8 +174,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
   },
   headerButton: {
-    width: 36,
-    height: 36,
+    width: moderateScale(36),
+    height: moderateScale(36),
     backgroundColor: colors.surface,
     borderRadius: borderRadius.full,
     alignItems: 'center',
@@ -199,8 +200,8 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   avatar: {
-    width: 50,
-    height: 50,
+    width: moderateScale(50),
+    height: moderateScale(50),
     backgroundColor: colors.primary,
     borderRadius: borderRadius.full,
     alignItems: 'center',
@@ -237,7 +238,7 @@ const styles = StyleSheet.create({
     padding: spacing.xl,
   },
   emptyIcon: {
-    fontSize: 64,
+    fontSize: scaleFontSize(64),
     marginBottom: spacing.lg,
   },
   emptyTitle: {

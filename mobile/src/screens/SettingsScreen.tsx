@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,15 +6,19 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
+  Switch,
+  Platform,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { RootStackParamList, Contact, Message } from '../types';
-import { generateId } from '../utils/helpers';
+import * as LocalAuthentication from 'expo-local-authentication';
+import { RootStackParamList } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { secureStorage } from '../storage/SecureStorage';
-import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { useTheme } from '../context/ThemeContext';
+import { secureStorage, PrivacySettings, AppLockSettings } from '../storage/SecureStorage';
+import { spacing, fontSize, borderRadius, ThemeColors } from '../utils/theme';
+import { moderateScale } from '../utils/responsive';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -22,6 +26,106 @@ export default function SettingsScreen() {
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
+  const { isDark, colors, toggleTheme } = useTheme();
+  const [privacySettings, setPrivacySettings] = useState<PrivacySettings>({
+    readReceipts: true,
+    typingIndicator: true,
+    showOnlineStatus: true,
+  });
+  const [appLockSettings, setAppLockSettings] = useState<AppLockSettings>({
+    enabled: false,
+    useBiometrics: false,
+  });
+  const [biometricsAvailable, setBiometricsAvailable] = useState(false);
+
+  // Create dynamic styles based on current theme colors
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
+  useEffect(() => {
+    loadPrivacySettings();
+    checkBiometrics();
+  }, []);
+
+  // Reload app lock settings when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      loadAppLockSettings();
+    }, [])
+  );
+
+  const loadAppLockSettings = async () => {
+    const settings = await secureStorage.getAppLockSettings();
+    setAppLockSettings(settings);
+  };
+
+  const checkBiometrics = async () => {
+    const hasHardware = await LocalAuthentication.hasHardwareAsync();
+    const isEnrolled = await LocalAuthentication.isEnrolledAsync();
+    setBiometricsAvailable(hasHardware && isEnrolled);
+  };
+
+  const loadPrivacySettings = async () => {
+    const settings = await secureStorage.getPrivacySettings();
+    setPrivacySettings(settings);
+  };
+
+  const handleReadReceiptsToggle = async (value: boolean) => {
+    const newSettings = { ...privacySettings, readReceipts: value };
+    setPrivacySettings(newSettings);
+    await secureStorage.setPrivacySettings(newSettings);
+  };
+
+  const handleTypingIndicatorToggle = async (value: boolean) => {
+    const newSettings = { ...privacySettings, typingIndicator: value };
+    setPrivacySettings(newSettings);
+    await secureStorage.setPrivacySettings(newSettings);
+  };
+
+  const handleOnlineStatusToggle = async (value: boolean) => {
+    const newSettings = { ...privacySettings, showOnlineStatus: value };
+    setPrivacySettings(newSettings);
+    await secureStorage.setPrivacySettings(newSettings);
+  };
+
+  const handleAppLockToggle = async (value: boolean) => {
+    if (value) {
+      // Navigate to SetupPin screen to set up PIN
+      navigation.navigate('SetupPin', { isChangingPin: false });
+    } else {
+      // Disable app lock
+      Alert.alert(
+        'Disable App Lock',
+        'Are you sure you want to disable app lock? Anyone with access to your device will be able to open Whisper.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Disable',
+            style: 'destructive',
+            onPress: async () => {
+              await secureStorage.setAppLockSettings({
+                enabled: false,
+                useBiometrics: false,
+                pinHash: undefined,
+              });
+              setAppLockSettings({ enabled: false, useBiometrics: false });
+            },
+          },
+        ]
+      );
+    }
+  };
+
+  const handleBiometricsToggle = async (value: boolean) => {
+    if (!appLockSettings.enabled) return;
+
+    const newSettings = { ...appLockSettings, useBiometrics: value };
+    setAppLockSettings(newSettings);
+    await secureStorage.setAppLockSettings(newSettings);
+  };
+
+  const handleChangePin = () => {
+    navigation.navigate('SetupPin', { isChangingPin: true });
+  };
 
   const handleLogout = () => {
     Alert.alert(
@@ -64,145 +168,6 @@ export default function SettingsScreen() {
         },
       ]
     );
-  };
-
-  const handleAddTestContacts = async () => {
-    const testContacts: Contact[] = [
-      {
-        whisperId: 'WSP-A1B2-C3D4-E5F6',
-        publicKey: 'dGVzdC1hbGljZS1wdWJsaWMta2V5LWJhc2U2NC1lbmNvZGVk',
-        username: 'Alice',
-        nickname: 'Alice (Test)',
-        addedAt: Date.now(),
-      },
-      {
-        whisperId: 'WSP-X7Y8-Z9W0-V1U2',
-        publicKey: 'dGVzdC1ib2ItcHVibGljLWtleS1iYXNlNjQtZW5jb2RlZA==',
-        username: 'Bob',
-        nickname: 'Bob (Test)',
-        addedAt: Date.now(),
-      },
-      {
-        whisperId: 'WSP-M3N4-P5Q6-R7S8',
-        publicKey: 'dGVzdC1jaGFybGllLXB1YmxpYy1rZXktYmFzZTY0LWVuYw==',
-        username: 'Charlie',
-        nickname: 'Charlie (Test)',
-        addedAt: Date.now(),
-      },
-      {
-        whisperId: 'WSP-T1U2-V3W4-X5Y6',
-        publicKey: 'dGVzdC1kaWFuYS1wdWJsaWMta2V5LWJhc2U2NC1lbmNvZGVk',
-        username: 'Diana',
-        nickname: 'Diana (Test)',
-        addedAt: Date.now(),
-      },
-    ];
-
-    try {
-      for (const contact of testContacts) {
-        const existing = await secureStorage.getContact(contact.whisperId);
-        if (!existing) {
-          await secureStorage.addContact(contact);
-        }
-      }
-      Alert.alert('Success', 'Test contacts added! Go to Contacts to see them.');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to add test contacts');
-      console.error(error);
-    }
-  };
-
-  const handleSimulateMessages = async () => {
-    const testMessages = [
-      {
-        contactId: 'WSP-A1B2-C3D4-E5F6',
-        senderName: 'Alice',
-        content: 'Hey! How are you? This is a test message from Alice.',
-      },
-      {
-        contactId: 'WSP-X7Y8-Z9W0-V1U2',
-        senderName: 'Bob',
-        content: 'Hi there! Bob here. Just testing the messaging feature!',
-      },
-      {
-        contactId: 'WSP-M3N4-P5Q6-R7S8',
-        senderName: 'Charlie',
-        content: 'Hello! Charlie checking in. How is everyone?',
-      },
-      {
-        contactId: 'WSP-T1U2-V3W4-X5Y6',
-        senderName: 'Diana',
-        content: 'Hey! Diana here. Nice to meet you on Whisper!',
-      },
-    ];
-
-    try {
-      for (const msg of testMessages) {
-        const contact = await secureStorage.getContact(msg.contactId);
-        if (!contact) {
-          continue; // Skip if contact doesn't exist
-        }
-
-        const message: Message = {
-          id: generateId(),
-          conversationId: msg.contactId,
-          senderId: msg.contactId,
-          content: msg.content,
-          timestamp: Date.now(),
-          status: 'delivered',
-        };
-
-        await secureStorage.addMessage(msg.contactId, message);
-        await secureStorage.updateConversation(msg.contactId, {
-          lastMessage: message,
-          updatedAt: Date.now(),
-          unreadCount: 1,
-        });
-      }
-      Alert.alert('Success', 'Test messages received! Check your Chats.');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to simulate messages');
-      console.error(error);
-    }
-  };
-
-  const handleSimulateReadReceipts = async () => {
-    if (!user) return;
-
-    const testContactIds = [
-      'WSP-A1B2-C3D4-E5F6',
-      'WSP-X7Y8-Z9W0-V1U2',
-      'WSP-M3N4-P5Q6-R7S8',
-      'WSP-T1U2-V3W4-X5Y6',
-    ];
-
-    try {
-      let totalMarked = 0;
-
-      for (const contactId of testContactIds) {
-        const messages = await secureStorage.getMessages(contactId);
-
-        // Find messages sent by current user that aren't already read
-        const myUnreadMessages = messages.filter(
-          m => m.senderId === user.whisperId && m.status !== 'read'
-        );
-
-        // Mark each as read (simulating recipient read them)
-        for (const msg of myUnreadMessages) {
-          await secureStorage.updateMessageStatus(contactId, msg.id, 'read');
-          totalMarked++;
-        }
-      }
-
-      if (totalMarked > 0) {
-        Alert.alert('Success', `${totalMarked} message(s) marked as read by recipients! Open a chat to see blue checkmarks.`);
-      } else {
-        Alert.alert('Info', 'No unread sent messages found. Send some messages first!');
-      }
-    } catch (error) {
-      Alert.alert('Error', 'Failed to simulate read receipts');
-      console.error(error);
-    }
   };
 
   return (
@@ -253,9 +218,56 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Privacy Section */}
+        {/* Security Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Privacy & Security</Text>
+          <Text style={styles.sectionTitle}>Security</Text>
+          <View style={styles.menuItemWithToggle}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>🔐</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>App Lock</Text>
+                <Text style={styles.menuDescription}>
+                  Require PIN to open Whisper
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={appLockSettings.enabled}
+              onValueChange={handleAppLockToggle}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor="#ffffff"
+            />
+          </View>
+          {appLockSettings.enabled && biometricsAvailable && (
+            <View style={styles.menuItemWithToggle}>
+              <View style={styles.menuItemContent}>
+                <Text style={styles.menuIcon}>
+                  {Platform.OS === 'ios' ? '(faceID)' : '(fingerprint)'}
+                </Text>
+                <View style={styles.menuTextContainer}>
+                  <Text style={styles.menuText}>
+                    Use {Platform.OS === 'ios' ? 'Face ID' : 'Fingerprint'}
+                  </Text>
+                  <Text style={styles.menuDescription}>
+                    Unlock with biometrics instead of PIN
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={appLockSettings.useBiometrics}
+                onValueChange={handleBiometricsToggle}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#ffffff"
+              />
+            </View>
+          )}
+          {appLockSettings.enabled && (
+            <TouchableOpacity style={styles.menuItem} onPress={handleChangePin}>
+              <Text style={styles.menuIcon}>🔢</Text>
+              <Text style={styles.menuText}>Change PIN</Text>
+              <Text style={styles.chevron}>-></Text>
+            </TouchableOpacity>
+          )}
           <View style={styles.menuItem}>
             <Text style={styles.menuIcon}>🔒</Text>
             <Text style={styles.menuText}>End-to-End Encryption</Text>
@@ -268,42 +280,117 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Privacy Settings Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Privacy</Text>
+          <View style={styles.menuItemWithToggle}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>👁️</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>Send Read Receipts</Text>
+                <Text style={styles.menuDescription}>
+                  Let others know when you've read their messages
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={privacySettings.readReceipts}
+              onValueChange={handleReadReceiptsToggle}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor={isDark ? '#ffffff' : '#ffffff'}
+            />
+          </View>
+          <View style={styles.menuItemWithToggle}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>⌨️</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>Show Typing Indicator</Text>
+                <Text style={styles.menuDescription}>
+                  Let others see when you're typing a message
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={privacySettings.typingIndicator}
+              onValueChange={handleTypingIndicatorToggle}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor={isDark ? '#ffffff' : '#ffffff'}
+            />
+          </View>
+          <View style={styles.menuItemWithToggle}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>🟢</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>Show Online Status</Text>
+                <Text style={styles.menuDescription}>
+                  Let others see when you're online
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={privacySettings.showOnlineStatus}
+              onValueChange={handleOnlineStatusToggle}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor={isDark ? '#ffffff' : '#ffffff'}
+            />
+          </View>
+        </View>
+
+        {/* Appearance Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Appearance</Text>
+          <View style={styles.menuItemWithToggle}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>{isDark ? '🌙' : '☀️'}</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>Dark Mode</Text>
+                <Text style={styles.menuDescription}>
+                  {isDark ? 'Switch to light theme' : 'Switch to dark theme'}
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={isDark}
+              onValueChange={toggleTheme}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor="#ffffff"
+            />
+          </View>
+        </View>
+
         {/* About Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>About</Text>
-          <View style={styles.menuItem}>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('About')}
+          >
             <Text style={styles.menuIcon}>ℹ️</Text>
-            <Text style={styles.menuText}>Version</Text>
-            <Text style={styles.menuValue}>1.0.0</Text>
-          </View>
-          <TouchableOpacity style={styles.menuItem}>
+            <Text style={styles.menuText}>About Whisper</Text>
+            <Text style={styles.chevron}>→</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('Privacy')}
+          >
             <Text style={styles.menuIcon}>📜</Text>
             <Text style={styles.menuText}>Privacy Policy</Text>
             <Text style={styles.chevron}>→</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem}>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('Terms')}
+          >
             <Text style={styles.menuIcon}>📋</Text>
             <Text style={styles.menuText}>Terms of Service</Text>
             <Text style={styles.chevron}>→</Text>
           </TouchableOpacity>
-        </View>
-
-        {/* Developer Section */}
-        <View style={styles.section}>
-          <Text style={[styles.sectionTitle, styles.devTitle]}>Developer</Text>
-          <TouchableOpacity style={styles.menuItem} onPress={handleAddTestContacts}>
-            <Text style={styles.menuIcon}>🧪</Text>
-            <Text style={styles.menuText}>Add Test Contacts</Text>
-            <Text style={styles.chevron}>→</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem} onPress={handleSimulateMessages}>
-            <Text style={styles.menuIcon}>📨</Text>
-            <Text style={styles.menuText}>Simulate Incoming Messages</Text>
-            <Text style={styles.chevron}>→</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.menuItem} onPress={handleSimulateReadReceipts}>
-            <Text style={styles.menuIcon}>👁️</Text>
-            <Text style={styles.menuText}>Simulate Read Receipts</Text>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigation.navigate('ChildSafety')}
+          >
+            <Text style={styles.menuIcon}>🛡️</Text>
+            <Text style={styles.menuText}>Child Safety</Text>
             <Text style={styles.chevron}>→</Text>
           </TouchableOpacity>
         </View>
@@ -331,125 +418,146 @@ export default function SettingsScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  header: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  headerTitle: {
-    fontSize: fontSize.xxl,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  content: {
-    paddingBottom: spacing.xxl,
-  },
-  profileSection: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: spacing.lg,
-    backgroundColor: colors.surface,
-    marginTop: spacing.md,
-    marginHorizontal: spacing.md,
-    borderRadius: borderRadius.md,
-  },
-  profileAvatar: {
-    width: 60,
-    height: 60,
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.md,
-  },
-  profileAvatarText: {
-    fontSize: fontSize.xxl,
-    color: colors.text,
-  },
-  profileInfo: {
-    flex: 1,
-  },
-  profileName: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: spacing.xs,
-  },
-  profileId: {
-    fontSize: fontSize.xs,
-    color: colors.textMuted,
-    fontFamily: 'monospace',
-  },
-  chevron: {
-    fontSize: fontSize.lg,
-    color: colors.textMuted,
-  },
-  section: {
-    marginTop: spacing.lg,
-    marginHorizontal: spacing.md,
-  },
-  sectionTitle: {
-    fontSize: fontSize.sm,
-    fontWeight: '600',
-    color: colors.textMuted,
-    marginBottom: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    textTransform: 'uppercase',
-  },
-  dangerTitle: {
-    color: colors.error,
-  },
-  devTitle: {
-    color: colors.primary,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    padding: spacing.md,
-    borderRadius: borderRadius.md,
-    marginBottom: spacing.xs,
-  },
-  menuIcon: {
-    fontSize: fontSize.lg,
-    marginRight: spacing.md,
-  },
-  menuText: {
-    flex: 1,
-    fontSize: fontSize.md,
-    color: colors.text,
-  },
-  dangerText: {
-    color: colors.error,
-  },
-  menuStatus: {
-    fontSize: fontSize.sm,
-    color: colors.success,
-    fontWeight: '500',
-  },
-  menuValue: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-  },
-  footer: {
-    alignItems: 'center',
-    marginTop: spacing.xxl,
-    paddingVertical: spacing.lg,
-  },
-  footerText: {
-    fontSize: fontSize.lg,
-    fontWeight: '600',
-    color: colors.textMuted,
-  },
-  footerSubtext: {
-    fontSize: fontSize.sm,
-    color: colors.textMuted,
-    marginTop: spacing.xs,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    header: {
+      paddingHorizontal: spacing.lg,
+      paddingVertical: spacing.md,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    headerTitle: {
+      fontSize: fontSize.xxl,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    content: {
+      paddingBottom: spacing.xxl,
+    },
+    profileSection: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: spacing.lg,
+      backgroundColor: colors.surface,
+      marginTop: spacing.md,
+      marginHorizontal: spacing.md,
+      borderRadius: borderRadius.md,
+    },
+    profileAvatar: {
+      width: moderateScale(60),
+      height: moderateScale(60),
+      backgroundColor: colors.primary,
+      borderRadius: borderRadius.full,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: spacing.md,
+    },
+    profileAvatarText: {
+      fontSize: fontSize.xxl,
+      color: colors.text,
+    },
+    profileInfo: {
+      flex: 1,
+    },
+    profileName: {
+      fontSize: fontSize.lg,
+      fontWeight: '600',
+      color: colors.text,
+      marginBottom: spacing.xs,
+    },
+    profileId: {
+      fontSize: fontSize.xs,
+      color: colors.textMuted,
+      fontFamily: 'monospace',
+    },
+    chevron: {
+      fontSize: fontSize.lg,
+      color: colors.textMuted,
+    },
+    section: {
+      marginTop: spacing.lg,
+      marginHorizontal: spacing.md,
+    },
+    sectionTitle: {
+      fontSize: fontSize.sm,
+      fontWeight: '600',
+      color: colors.textMuted,
+      marginBottom: spacing.sm,
+      paddingHorizontal: spacing.sm,
+      textTransform: 'uppercase',
+    },
+    dangerTitle: {
+      color: colors.error,
+    },
+    menuItem: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      padding: spacing.md,
+      borderRadius: borderRadius.md,
+      marginBottom: spacing.xs,
+    },
+    menuIcon: {
+      fontSize: fontSize.lg,
+      marginRight: spacing.md,
+    },
+    menuText: {
+      flex: 1,
+      fontSize: fontSize.md,
+      color: colors.text,
+    },
+    dangerText: {
+      color: colors.error,
+    },
+    menuStatus: {
+      fontSize: fontSize.sm,
+      color: colors.success,
+      fontWeight: '500',
+    },
+    menuValue: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+    },
+    menuItemWithToggle: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: colors.surface,
+      padding: spacing.md,
+      borderRadius: borderRadius.md,
+      marginBottom: spacing.xs,
+    },
+    menuItemContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      flex: 1,
+      marginRight: spacing.md,
+    },
+    menuTextContainer: {
+      flex: 1,
+    },
+    menuDescription: {
+      fontSize: fontSize.xs,
+      color: colors.textMuted,
+      marginTop: spacing.xs,
+    },
+    footer: {
+      alignItems: 'center',
+      marginTop: spacing.xxl,
+      paddingVertical: spacing.lg,
+    },
+    footerText: {
+      fontSize: fontSize.lg,
+      fontWeight: '600',
+      color: colors.textMuted,
+    },
+    footerSubtext: {
+      fontSize: fontSize.sm,
+      color: colors.textMuted,
+      marginTop: spacing.xs,
+    },
+  });

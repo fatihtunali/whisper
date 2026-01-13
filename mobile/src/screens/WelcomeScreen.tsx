@@ -9,6 +9,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthStackParamList } from '../types';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale, scaleFontSize } from '../utils/responsive';
 
 type Props = {
   navigation: NativeStackNavigationProp<AuthStackParamList, 'Welcome'>;
@@ -87,8 +88,8 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   logo: {
-    width: 80,
-    height: 80,
+    width: moderateScale(80),
+    height: moderateScale(80),
     backgroundColor: colors.primary,
     borderRadius: borderRadius.xl,
     alignItems: 'center',
@@ -96,7 +97,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   logoIcon: {
-    fontSize: 40,
+    fontSize: scaleFontSize(40),
   },
   appName: {
     fontSize: fontSize.xxxl,
@@ -121,7 +122,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.textSecondary,
     textAlign: 'center',
-    lineHeight: 24,
+    lineHeight: moderateScale(24),
     marginBottom: spacing.xxl,
   },
   buttonContainer: {

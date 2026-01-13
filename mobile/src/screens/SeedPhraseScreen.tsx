@@ -12,6 +12,7 @@ import { RouteProp } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthStackParamList } from '../types';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale, scaleFontSize } from '../utils/responsive';
 
 type Props = {
   navigation: NativeStackNavigationProp<AuthStackParamList, 'SeedPhrase'>;
@@ -129,7 +130,7 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: fontSize.md,
     color: colors.textSecondary,
-    lineHeight: 22,
+    lineHeight: moderateScale(22),
   },
   warningBox: {
     backgroundColor: '#451a03',
@@ -142,14 +143,14 @@ const styles = StyleSheet.create({
     borderColor: '#92400e',
   },
   warningIcon: {
-    fontSize: 20,
+    fontSize: scaleFontSize(20),
     marginRight: spacing.sm,
   },
   warningText: {
     flex: 1,
     fontSize: fontSize.sm,
     color: '#fbbf24',
-    lineHeight: 20,
+    lineHeight: moderateScale(20),
   },
   phraseContainer: {
     flexDirection: 'row',
@@ -172,7 +173,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: colors.textMuted,
     marginRight: spacing.sm,
-    minWidth: 16,
+    minWidth: moderateScale(16),
   },
   word: {
     fontSize: fontSize.sm,
@@ -194,8 +195,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   checkbox: {
-    width: 24,
-    height: 24,
+    width: moderateScale(24),
+    height: moderateScale(24),
     borderRadius: borderRadius.sm,
     borderWidth: 2,
     borderColor: colors.border,
@@ -209,7 +210,7 @@ const styles = StyleSheet.create({
   },
   checkmark: {
     color: colors.text,
-    fontSize: 14,
+    fontSize: scaleFontSize(14),
     fontWeight: '700',
   },
   confirmText: {

@@ -3,17 +3,40 @@ import { Server as HTTPServer } from 'http';
 import { connectionManager } from './ConnectionManager';
 import { messageRouter } from '../services/MessageRouter';
 import { messageQueue } from '../services/MessageQueue';
+import { adminService } from '../services/AdminService';
+import { reportService } from '../services/ReportService';
+import { authService } from '../services/AuthService';
+import { blockService } from '../services/BlockService';
+import { rateLimiter } from '../services/RateLimiter';
+import { groupService } from '../services/GroupService';
 import {
   ClientMessage,
   ServerMessage,
+  RegisterChallengeMessage,
   RegisterAckMessage,
   PongMessage,
   ErrorMessage,
+  ReactionReceivedMessage,
+  TypingStatusMessage,
+  BlockAckMessage,
+  UnblockAckMessage,
+  AccountDeletedMessage,
+  IncomingCallMessage,
+  CallAnsweredMessage,
+  CallIceCandidateReceivedMessage,
+  CallEndedMessage,
+  GroupCreatedMessage,
+  GroupMessageReceivedMessage,
+  GroupUpdatedMessage,
+  MemberLeftGroupMessage,
 } from '../types';
+import nacl from 'tweetnacl';
 
 export class WebSocketServer {
   private wss: WSServer;
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private socketIdCounter = 0;
+  private socketIds: Map<WebSocket, string> = new Map();
 
   constructor(server: HTTPServer) {
     this.wss = new WSServer({ server });
@@ -24,21 +47,37 @@ export class WebSocketServer {
 
   private setupEventHandlers(): void {
     this.wss.on('connection', (socket: WebSocket) => {
-      console.log('[WebSocket] New connection');
+      // Assign unique socket ID for challenge-response tracking
+      const socketId = `socket-${++this.socketIdCounter}`;
+      this.socketIds.set(socket, socketId);
+      console.log(`[WebSocket] New connection: ${socketId}`);
 
       socket.on('message', (data: Buffer) => {
         this.handleMessage(socket, data);
       });
 
       socket.on('close', () => {
+        const sid = this.socketIds.get(socket);
+        this.socketIds.delete(socket);
+
+        // Clean up any pending auth challenge
+        if (sid) {
+          authService.removePendingChallenge(sid);
+        }
+
         const whisperId = connectionManager.unregisterBySocket(socket);
         if (whisperId) {
           console.log(`[WebSocket] Disconnected: ${whisperId}`);
         }
       });
 
-      socket.on('error', (error) => {
+      socket.on('error', (error: Error) => {
         console.error('[WebSocket] Socket error:', error);
+        const sid = this.socketIds.get(socket);
+        this.socketIds.delete(socket);
+        if (sid) {
+          authService.removePendingChallenge(sid);
+        }
         connectionManager.unregisterBySocket(socket);
       });
     });
@@ -59,6 +98,10 @@ export class WebSocketServer {
         this.handleRegister(socket, message.payload);
         break;
 
+      case 'register_proof':
+        this.handleRegisterProof(socket, message.payload);
+        break;
+
       case 'send_message':
         this.handleSendMessage(socket, message.payload);
         break;
@@ -68,11 +111,68 @@ export class WebSocketServer {
         break;
 
       case 'fetch_pending':
-        this.handleFetchPending(socket);
+        this.handleFetchPending(socket, message.payload);
         break;
 
       case 'ping':
         this.handlePing(socket);
+        break;
+
+      case 'report_user':
+        this.handleReportUser(socket, message.payload);
+        break;
+
+      case 'reaction':
+        this.handleReaction(socket, message.payload);
+        break;
+
+      case 'typing':
+        this.handleTyping(socket, message.payload);
+        break;
+
+      case 'block_user':
+        this.handleBlockUser(socket, message.payload);
+        break;
+
+      case 'unblock_user':
+        this.handleUnblockUser(socket, message.payload);
+        break;
+
+      case 'delete_account':
+        this.handleDeleteAccount(socket, message.payload);
+        break;
+
+      case 'call_initiate':
+        this.handleCallInitiate(socket, message.payload);
+        break;
+
+      case 'call_answer':
+        this.handleCallAnswer(socket, message.payload);
+        break;
+
+      case 'call_ice_candidate':
+        this.handleCallIceCandidate(socket, message.payload);
+        break;
+
+      case 'call_end':
+        this.handleCallEnd(socket, message.payload);
+        break;
+
+      // Group message handlers
+      case 'create_group':
+        this.handleCreateGroup(socket, message.payload);
+        break;
+
+      case 'send_group_message':
+        this.handleSendGroupMessage(socket, message.payload);
+        break;
+
+      case 'update_group':
+        this.handleUpdateGroup(socket, message.payload);
+        break;
+
+      case 'leave_group':
+        this.handleLeaveGroup(socket, message.payload);
         break;
 
       default:
@@ -82,9 +182,22 @@ export class WebSocketServer {
 
   private handleRegister(
     socket: WebSocket,
-    payload: { whisperId: string; publicKey: string }
+    payload: {
+      whisperId: string;
+      publicKey: string;
+      signingPublicKey: string;
+      pushToken?: string;
+      prefs?: { sendReadReceipts: boolean; sendTypingIndicator: boolean; hideOnlineStatus: boolean };
+    }
   ): void {
-    const { whisperId, publicKey } = payload;
+    const { whisperId, publicKey, signingPublicKey, pushToken, prefs } = payload;
+
+    // Get socket ID
+    const socketId = this.socketIds.get(socket);
+    if (!socketId) {
+      this.sendError(socket, 'INTERNAL_ERROR', 'Socket not tracked');
+      return;
+    }
 
     // Validate Whisper ID format
     if (!whisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(whisperId)) {
@@ -92,14 +205,78 @@ export class WebSocketServer {
       return;
     }
 
-    // Validate public key
+    // Check if user is banned
+    if (adminService.isBanned(whisperId)) {
+      console.warn(`[WebSocket] Banned user attempted to connect: ${whisperId}`);
+      this.sendError(socket, 'BANNED', 'This account has been suspended');
+      socket.close(1008, 'Account suspended');
+      return;
+    }
+
+    // Validate public key (X25519 encryption key)
     if (!publicKey || publicKey.length < 10) {
       this.sendError(socket, 'INVALID_KEY', 'Invalid public key');
       return;
     }
 
-    // Register the client
-    connectionManager.register(whisperId, publicKey, socket);
+    // Validate signing public key (Ed25519 authentication key)
+    if (!signingPublicKey || signingPublicKey.length < 10) {
+      this.sendError(socket, 'INVALID_KEY', 'Invalid signing public key');
+      return;
+    }
+
+    // Create authentication challenge
+    const challenge = authService.createChallenge(socketId, {
+      whisperId,
+      publicKey,
+      signingPublicKey,
+      pushToken,
+      prefs,
+    });
+
+    // Send challenge to client
+    const challengeMsg: RegisterChallengeMessage = {
+      type: 'register_challenge',
+      payload: { challenge },
+    };
+    this.send(socket, challengeMsg);
+
+    console.log(`[WebSocket] Challenge sent to ${whisperId}`);
+  }
+
+  private handleRegisterProof(
+    socket: WebSocket,
+    payload: { signature: string }
+  ): void {
+    const { signature } = payload;
+
+    // Get socket ID
+    const socketId = this.socketIds.get(socket);
+    if (!socketId) {
+      this.sendError(socket, 'INTERNAL_ERROR', 'Socket not tracked');
+      return;
+    }
+
+    // Verify the signature
+    const result = authService.verifyProof(socketId, signature);
+
+    if (!result.success || !result.data) {
+      const errorCode = result.error || 'AUTH_FAILED';
+      const errorMsg =
+        errorCode === 'CHALLENGE_EXPIRED'
+          ? 'Authentication challenge expired'
+          : errorCode === 'NO_CHALLENGE'
+          ? 'No pending challenge found'
+          : 'Authentication failed';
+
+      this.sendError(socket, errorCode, errorMsg);
+      return;
+    }
+
+    // Authentication successful - register the client
+    const { whisperId, publicKey, signingPublicKey, pushToken, prefs } = result.data;
+
+    connectionManager.register(whisperId, publicKey, signingPublicKey, socket, pushToken, prefs);
 
     // Send acknowledgment
     const ack: RegisterAckMessage = {
@@ -110,7 +287,8 @@ export class WebSocketServer {
 
     // Deliver any pending messages
     const delivered = messageRouter.deliverPending(whisperId);
-    console.log(`[WebSocket] Registered ${whisperId}, delivered ${delivered} pending messages`);
+    const hidden = prefs?.hideOnlineStatus ? ' [hidden]' : '';
+    console.log(`[WebSocket] Authenticated and registered ${whisperId}, delivered ${delivered} pending messages${hidden}`);
   }
 
   private handleSendMessage(
@@ -133,6 +311,12 @@ export class WebSocketServer {
     // Validate recipient Whisper ID
     if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
       this.sendError(socket, 'INVALID_RECIPIENT', 'Invalid recipient Whisper ID');
+      return;
+    }
+
+    // Check if sender is blocked by recipient
+    if (blockService.isBlocked(client.whisperId, toWhisperId)) {
+      this.sendError(socket, 'BLOCKED', 'You are blocked by this user');
       return;
     }
 
@@ -171,18 +355,58 @@ export class WebSocketServer {
 
     const { messageId, toWhisperId, status } = payload;
 
+    // Don't forward read receipts if client has disabled them in prefs
+    if (status === 'read' && client.prefs?.sendReadReceipts === false) {
+      return;
+    }
+
     // Forward the receipt to the original sender
     messageRouter.forwardReceipt(client.whisperId, toWhisperId, messageId, status);
   }
 
-  private handleFetchPending(socket: WebSocket): void {
+  private handleFetchPending(
+    socket: WebSocket,
+    payload: { cursor?: string } = {}
+  ): void {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
       return;
     }
 
-    messageRouter.deliverPending(client.whisperId);
+    const { cursor } = payload;
+
+    // Get paginated pending messages
+    const result = messageQueue.getPendingPaginated(
+      client.whisperId,
+      cursor || null,
+      50 // Default limit
+    );
+
+    // Send pending messages with pagination info
+    const pendingMsg: ServerMessage = {
+      type: 'pending_messages',
+      payload: {
+        messages: result.messages.map(msg => ({
+          messageId: msg.id,
+          fromWhisperId: msg.fromWhisperId,
+          encryptedContent: msg.encryptedContent,
+          nonce: msg.nonce,
+          timestamp: msg.timestamp,
+        })),
+        cursor: result.cursor,
+        nextCursor: result.nextCursor,
+        hasMore: result.hasMore,
+      },
+    };
+    this.send(socket, pendingMsg);
+
+    // Only clear pending messages when all have been delivered (no more pages)
+    if (!result.hasMore && result.messages.length > 0) {
+      messageQueue.clearPending(client.whisperId);
+    }
+
+    console.log(`[WebSocket] Sent ${result.messages.length} pending messages to ${client.whisperId}${result.hasMore ? ' (more available)' : ''}`);
   }
 
   private handlePing(socket: WebSocket): void {
@@ -196,6 +420,699 @@ export class WebSocketServer {
       payload: {},
     };
     this.send(socket, pong);
+  }
+
+  private handleReportUser(
+    socket: WebSocket,
+    payload: {
+      reportedWhisperId: string;
+      reason: 'inappropriate_content' | 'harassment' | 'spam' | 'child_safety' | 'other';
+      description?: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { reportedWhisperId, reason, description } = payload;
+
+    // Validate reported Whisper ID
+    if (!reportedWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(reportedWhisperId)) {
+      this.sendError(socket, 'INVALID_REPORTED_ID', 'Invalid reported user Whisper ID');
+      return;
+    }
+
+    // Submit the report
+    const report = reportService.submitReport(
+      client.whisperId,
+      reportedWhisperId,
+      reason,
+      description
+    );
+
+    // Send acknowledgment
+    const ack: ServerMessage = {
+      type: 'report_ack',
+      payload: {
+        reportId: report.id,
+        success: true,
+      },
+    };
+    this.send(socket, ack);
+
+    console.log(`[WebSocket] Report ${report.id} submitted by ${client.whisperId}`);
+  }
+
+  private handleReaction(
+    socket: WebSocket,
+    payload: {
+      messageId: string;
+      toWhisperId: string;
+      emoji: string | null;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { messageId, toWhisperId, emoji } = payload;
+
+    // Validate recipient Whisper ID
+    if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
+      this.sendError(socket, 'INVALID_RECIPIENT', 'Invalid recipient Whisper ID');
+      return;
+    }
+
+    // Check if sender is blocked by recipient - silently drop
+    if (blockService.isBlocked(client.whisperId, toWhisperId)) {
+      return;
+    }
+
+    // Forward reaction to recipient if online
+    const recipient = connectionManager.get(toWhisperId);
+    if (recipient) {
+      const reactionMessage: ReactionReceivedMessage = {
+        type: 'reaction_received',
+        payload: {
+          messageId,
+          fromWhisperId: client.whisperId,
+          emoji,
+        },
+      };
+      this.send(recipient.socket, reactionMessage);
+      console.log(`[WebSocket] Reaction forwarded from ${client.whisperId} to ${toWhisperId}`);
+    }
+    // Note: Reactions are not queued for offline users - they're transient
+  }
+
+  private handleTyping(
+    socket: WebSocket,
+    payload: {
+      toWhisperId: string;
+      isTyping: boolean;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { toWhisperId, isTyping } = payload;
+
+    // Validate recipient Whisper ID
+    if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
+      this.sendError(socket, 'INVALID_RECIPIENT', 'Invalid recipient Whisper ID');
+      return;
+    }
+
+    // Don't forward typing status if sender has hidden their online status
+    // or disabled typing indicator in prefs (typing implies being online)
+    if (client.prefs?.hideOnlineStatus || client.prefs?.sendTypingIndicator === false) {
+      return;
+    }
+
+    // Rate limit typing indicators (max 1 per 2 seconds per sender/recipient)
+    if (rateLimiter.checkTypingLimit(client.whisperId, toWhisperId)) {
+      this.sendError(socket, 'RATE_LIMITED', 'Too many typing indicators');
+      return;
+    }
+
+    // Check if sender is blocked by recipient - silently drop
+    if (blockService.isBlocked(client.whisperId, toWhisperId)) {
+      return;
+    }
+
+    // Forward typing status to recipient if online
+    const recipient = connectionManager.get(toWhisperId);
+    if (recipient) {
+      const typingMessage: TypingStatusMessage = {
+        type: 'typing_status',
+        payload: {
+          fromWhisperId: client.whisperId,
+          isTyping,
+        },
+      };
+      this.send(recipient.socket, typingMessage);
+    }
+    // Note: Typing status is not queued for offline users - it's transient
+  }
+
+  // Block handlers
+  private handleBlockUser(
+    socket: WebSocket,
+    payload: { whisperId: string }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { whisperId } = payload;
+
+    // Validate Whisper ID format
+    if (!whisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(whisperId)) {
+      this.sendError(socket, 'INVALID_ID', 'Invalid Whisper ID format');
+      return;
+    }
+
+    // Cannot block yourself
+    if (whisperId === client.whisperId) {
+      this.sendError(socket, 'INVALID_OPERATION', 'Cannot block yourself');
+      return;
+    }
+
+    // Block the user
+    blockService.block(client.whisperId, whisperId);
+
+    // Send acknowledgment
+    const ack: BlockAckMessage = {
+      type: 'block_ack',
+      payload: { whisperId, success: true },
+    };
+    this.send(socket, ack);
+
+    console.log(`[WebSocket] ${client.whisperId} blocked ${whisperId}`);
+  }
+
+  private handleUnblockUser(
+    socket: WebSocket,
+    payload: { whisperId: string }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { whisperId } = payload;
+
+    // Validate Whisper ID format
+    if (!whisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(whisperId)) {
+      this.sendError(socket, 'INVALID_ID', 'Invalid Whisper ID format');
+      return;
+    }
+
+    // Unblock the user
+    blockService.unblock(client.whisperId, whisperId);
+
+    // Send acknowledgment
+    const ack: UnblockAckMessage = {
+      type: 'unblock_ack',
+      payload: { whisperId, success: true },
+    };
+    this.send(socket, ack);
+
+    console.log(`[WebSocket] ${client.whisperId} unblocked ${whisperId}`);
+  }
+
+  // Account deletion handler
+  private handleDeleteAccount(
+    socket: WebSocket,
+    payload: {
+      confirmation: string;
+      timestamp: number;
+      signature: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { confirmation, timestamp, signature } = payload;
+
+    // 1. Verify confirmation string
+    if (confirmation !== 'DELETE_MY_ACCOUNT') {
+      this.sendError(socket, 'INVALID_CONFIRMATION', 'Invalid confirmation string');
+      return;
+    }
+
+    // 2. Verify timestamp is within 5 minutes
+    const now = Date.now();
+    const fiveMinutesMs = 5 * 60 * 1000;
+    if (Math.abs(now - timestamp) > fiveMinutesMs) {
+      this.sendError(socket, 'CHALLENGE_EXPIRED', 'Timestamp is too old or too far in the future');
+      return;
+    }
+
+    // 3. Verify Ed25519 signature of "DELETE_MY_ACCOUNT:{timestamp}"
+    try {
+      const message = `DELETE_MY_ACCOUNT:${timestamp}`;
+      const messageBytes = new TextEncoder().encode(message);
+      const signatureBytes = Buffer.from(signature, 'base64');
+      const publicKeyBytes = Buffer.from(client.signingPublicKey, 'base64');
+
+      const isValid = nacl.sign.detached.verify(
+        messageBytes,
+        signatureBytes,
+        publicKeyBytes
+      );
+
+      if (!isValid) {
+        this.sendError(socket, 'AUTH_FAILED', 'Invalid signature');
+        return;
+      }
+    } catch (error) {
+      this.sendError(socket, 'AUTH_FAILED', 'Signature verification failed');
+      return;
+    }
+
+    // 4. Delete all user data
+    const whisperId = client.whisperId;
+
+    // Clear pending messages for this user
+    messageQueue.clearPending(whisperId);
+
+    // Clear all blocks by and against this user
+    blockService.clearBlocks(whisperId);
+
+    // Clear user from all groups (deletes groups they created)
+    groupService.clearUserGroups(whisperId);
+
+    // Unregister from connection manager
+    connectionManager.unregister(whisperId);
+
+    // 5. Send confirmation
+    const accountDeletedMsg: AccountDeletedMessage = {
+      type: 'account_deleted',
+      payload: { success: true },
+    };
+    this.send(socket, accountDeletedMsg);
+
+    console.log(`[WebSocket] Account deleted: ${whisperId}`);
+
+    // 6. Close the connection
+    socket.close(1000, 'Account deleted');
+  }
+
+  // Call signaling handlers
+  private handleCallInitiate(
+    socket: WebSocket,
+    payload: {
+      toWhisperId: string;
+      callId: string;
+      offer: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { toWhisperId, callId, offer } = payload;
+
+    // Validate recipient Whisper ID
+    if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
+      this.sendError(socket, 'INVALID_RECIPIENT', 'Invalid recipient Whisper ID');
+      return;
+    }
+
+    // Check if caller is blocked by recipient
+    if (blockService.isBlocked(client.whisperId, toWhisperId)) {
+      this.sendError(socket, 'BLOCKED', 'Cannot call this user');
+      return;
+    }
+
+    // Forward call to recipient if online
+    const recipient = connectionManager.get(toWhisperId);
+    if (recipient) {
+      const incomingCallMessage: IncomingCallMessage = {
+        type: 'incoming_call',
+        payload: {
+          fromWhisperId: client.whisperId,
+          callId,
+          offer,
+        },
+      };
+      this.send(recipient.socket, incomingCallMessage);
+      console.log(`[WebSocket] Call initiated from ${client.whisperId} to ${toWhisperId}`);
+    } else {
+      // Recipient offline - send error back to caller
+      this.sendError(socket, 'RECIPIENT_OFFLINE', 'Recipient is not available');
+    }
+  }
+
+  private handleCallAnswer(
+    socket: WebSocket,
+    payload: {
+      toWhisperId: string;
+      callId: string;
+      answer: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { toWhisperId, callId, answer } = payload;
+
+    // Forward answer to caller if online
+    const recipient = connectionManager.get(toWhisperId);
+    if (recipient) {
+      const callAnsweredMessage: CallAnsweredMessage = {
+        type: 'call_answered',
+        payload: {
+          fromWhisperId: client.whisperId,
+          callId,
+          answer,
+        },
+      };
+      this.send(recipient.socket, callAnsweredMessage);
+      console.log(`[WebSocket] Call answered from ${client.whisperId} to ${toWhisperId}`);
+    }
+  }
+
+  private handleCallIceCandidate(
+    socket: WebSocket,
+    payload: {
+      toWhisperId: string;
+      callId: string;
+      candidate: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { toWhisperId, callId, candidate } = payload;
+
+    // Forward ICE candidate to peer if online
+    const recipient = connectionManager.get(toWhisperId);
+    if (recipient) {
+      const iceCandidateMessage: CallIceCandidateReceivedMessage = {
+        type: 'call_ice_candidate',
+        payload: {
+          fromWhisperId: client.whisperId,
+          callId,
+          candidate,
+        },
+      };
+      this.send(recipient.socket, iceCandidateMessage);
+    }
+  }
+
+  private handleCallEnd(
+    socket: WebSocket,
+    payload: {
+      toWhisperId: string;
+      callId: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { toWhisperId, callId } = payload;
+
+    // Forward call end to peer if online
+    const recipient = connectionManager.get(toWhisperId);
+    if (recipient) {
+      const callEndedMessage: CallEndedMessage = {
+        type: 'call_ended',
+        payload: {
+          fromWhisperId: client.whisperId,
+          callId,
+        },
+      };
+      this.send(recipient.socket, callEndedMessage);
+      console.log(`[WebSocket] Call ended from ${client.whisperId} to ${toWhisperId}`);
+    }
+  }
+
+  // Group handlers
+  private handleCreateGroup(
+    socket: WebSocket,
+    payload: {
+      groupId: string;
+      name: string;
+      members: string[];
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { groupId, name, members } = payload;
+
+    // Validate group ID format
+    if (!groupId || !/^GRP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(groupId)) {
+      this.sendError(socket, 'INVALID_GROUP_ID', 'Invalid group ID format');
+      return;
+    }
+
+    // Validate group name
+    if (!name || name.length < 1 || name.length > 50) {
+      this.sendError(socket, 'INVALID_GROUP_NAME', 'Group name must be 1-50 characters');
+      return;
+    }
+
+    // Validate members
+    if (!members || members.length < 1) {
+      this.sendError(socket, 'INVALID_MEMBERS', 'Group must have at least one member besides creator');
+      return;
+    }
+
+    const createdAt = Date.now();
+    const allMembers = [client.whisperId, ...members];
+
+    // Register group with GroupService for authorization tracking
+    groupService.createGroup(groupId, client.whisperId, members);
+
+    // Notify all online members about the new group
+    const groupCreatedMessage: GroupCreatedMessage = {
+      type: 'group_created',
+      payload: {
+        groupId,
+        name,
+        createdBy: client.whisperId,
+        members: allMembers,
+        createdAt,
+      },
+    };
+
+    // Send to all members (including creator)
+    for (const memberId of allMembers) {
+      const member = connectionManager.get(memberId);
+      if (member) {
+        this.send(member.socket, groupCreatedMessage);
+      }
+    }
+
+    console.log(`[WebSocket] Group ${groupId} created by ${client.whisperId} with ${allMembers.length} members`);
+  }
+
+  private handleSendGroupMessage(
+    socket: WebSocket,
+    payload: {
+      groupId: string;
+      messageId: string;
+      encryptedContent: string;
+      nonce: string;
+      senderName?: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { groupId, messageId, encryptedContent, nonce, senderName } = payload;
+
+    // Validate group ID format
+    if (!groupId || !/^GRP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(groupId)) {
+      this.sendError(socket, 'INVALID_GROUP_ID', 'Invalid group ID format');
+      return;
+    }
+
+    // Check if group exists
+    const group = groupService.getGroup(groupId);
+    if (!group) {
+      this.sendError(socket, 'GROUP_NOT_FOUND', 'Group does not exist');
+      return;
+    }
+
+    // Check if sender is a member of the group
+    if (!groupService.isMember(groupId, client.whisperId)) {
+      this.sendError(socket, 'UNAUTHORIZED', 'You are not a member of this group');
+      return;
+    }
+
+    const timestamp = Date.now();
+
+    // Create the message to broadcast
+    const groupMessageReceived: GroupMessageReceivedMessage = {
+      type: 'group_message_received',
+      payload: {
+        groupId,
+        messageId,
+        fromWhisperId: client.whisperId,
+        encryptedContent,
+        nonce,
+        timestamp,
+        senderName,
+      },
+    };
+
+    // Send only to group members (excluding sender)
+    const members = groupService.getMembers(groupId);
+    let deliveredCount = 0;
+    for (const memberId of members) {
+      if (memberId === client.whisperId) continue; // Skip sender
+      const member = connectionManager.get(memberId);
+      if (member) {
+        this.send(member.socket, groupMessageReceived);
+        deliveredCount++;
+      }
+    }
+
+    console.log(`[WebSocket] Group message ${messageId} sent to group ${groupId} (${deliveredCount}/${members.length - 1} members online)`);
+  }
+
+  private handleUpdateGroup(
+    socket: WebSocket,
+    payload: {
+      groupId: string;
+      name?: string;
+      addMembers?: string[];
+      removeMembers?: string[];
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { groupId, name, addMembers, removeMembers } = payload;
+
+    // Validate group ID format
+    if (!groupId || !/^GRP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(groupId)) {
+      this.sendError(socket, 'INVALID_GROUP_ID', 'Invalid group ID format');
+      return;
+    }
+
+    // Check if group exists
+    const group = groupService.getGroup(groupId);
+    if (!group) {
+      this.sendError(socket, 'GROUP_NOT_FOUND', 'Group does not exist');
+      return;
+    }
+
+    // Only group creator can update the group
+    if (!groupService.isCreator(groupId, client.whisperId)) {
+      this.sendError(socket, 'UNAUTHORIZED', 'Only group creator can update the group');
+      return;
+    }
+
+    // Apply membership changes to GroupService
+    if (addMembers && addMembers.length > 0) {
+      groupService.addMembers(groupId, addMembers);
+    }
+    if (removeMembers && removeMembers.length > 0) {
+      groupService.removeMembers(groupId, removeMembers);
+    }
+
+    // Create update notification
+    const groupUpdatedMessage: GroupUpdatedMessage = {
+      type: 'group_updated',
+      payload: {
+        groupId,
+        updatedBy: client.whisperId,
+        name,
+        addedMembers: addMembers,
+        removedMembers: removeMembers,
+      },
+    };
+
+    // Send to all current group members (including newly added)
+    const members = groupService.getMembers(groupId);
+    for (const memberId of members) {
+      const member = connectionManager.get(memberId);
+      if (member) {
+        this.send(member.socket, groupUpdatedMessage);
+      }
+    }
+
+    // Also send to removed members so they know they were removed
+    if (removeMembers) {
+      for (const memberId of removeMembers) {
+        const member = connectionManager.get(memberId);
+        if (member) {
+          this.send(member.socket, groupUpdatedMessage);
+        }
+      }
+    }
+
+    console.log(`[WebSocket] Group ${groupId} updated by ${client.whisperId}`);
+  }
+
+  private handleLeaveGroup(
+    socket: WebSocket,
+    payload: {
+      groupId: string;
+    }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { groupId } = payload;
+
+    // Validate group ID format
+    if (!groupId || !/^GRP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(groupId)) {
+      this.sendError(socket, 'INVALID_GROUP_ID', 'Invalid group ID format');
+      return;
+    }
+
+    // Check if user is actually a member
+    if (!groupService.isMember(groupId, client.whisperId)) {
+      this.sendError(socket, 'NOT_A_MEMBER', 'You are not a member of this group');
+      return;
+    }
+
+    // Get current members BEFORE leaving (to notify them)
+    const members = groupService.getMembers(groupId);
+
+    // Update group service (removes member or deletes group if creator leaves)
+    groupService.memberLeft(groupId, client.whisperId);
+
+    // Notify all group members about member leaving
+    const memberLeftMessage: MemberLeftGroupMessage = {
+      type: 'member_left_group',
+      payload: {
+        groupId,
+        memberId: client.whisperId,
+      },
+    };
+
+    // Send to all members (including the leaving member)
+    for (const memberId of members) {
+      const member = connectionManager.get(memberId);
+      if (member) {
+        this.send(member.socket, memberLeftMessage);
+      }
+    }
+
+    console.log(`[WebSocket] Member ${client.whisperId} left group ${groupId}`);
   }
 
   private send(socket: WebSocket, message: ServerMessage): void {

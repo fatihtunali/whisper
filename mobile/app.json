@@ -24,8 +24,10 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "package": "com.sarjmobile.whisper"
+      "edgeToEdgeEnabled": false,
+      "softwareKeyboardLayoutMode": "resize",
+      "package": "com.sarjmobile.whisper",
+      "versionCode": 2
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -35,6 +37,10 @@
         "projectId": "395d7567-88ca-4a3e-bb59-676bda71ba5e"
       }
     },
-    "owner": "fatihtunali"
+    "owner": "fatihtunali",
+    "plugins": [
+      "expo-audio",
+      "expo-video"
+    ]
   }
 }

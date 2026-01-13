@@ -15,6 +15,7 @@ import { RootStackParamList } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { createQRData } from '../utils/helpers';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale } from '../utils/responsive';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -66,7 +67,7 @@ export default function MyQRScreen() {
           <View style={styles.qrWrapper}>
             <QRCode
               value={qrData}
-              size={220}
+              size={moderateScale(220)}
               backgroundColor="white"
               color={colors.background}
             />

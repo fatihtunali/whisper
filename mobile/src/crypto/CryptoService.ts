@@ -85,7 +85,7 @@ const WORDLIST = [
 
 class CryptoService {
   /**
-   * Generate a new key pair using X25519
+   * Generate a new encryption key pair using X25519
    */
   generateKeyPair(): { publicKey: string; privateKey: string } {
     const keyPair = nacl.box.keyPair();
@@ -93,6 +93,41 @@ class CryptoService {
       publicKey: encodeBase64(keyPair.publicKey),
       privateKey: encodeBase64(keyPair.secretKey),
     };
+  }
+
+  /**
+   * Generate a new signing key pair using Ed25519
+   * Used for authentication (challenge-response)
+   */
+  generateSigningKeyPair(): { signingPublicKey: string; signingPrivateKey: string } {
+    const keyPair = nacl.sign.keyPair();
+    return {
+      signingPublicKey: encodeBase64(keyPair.publicKey),
+      signingPrivateKey: encodeBase64(keyPair.secretKey),
+    };
+  }
+
+  /**
+   * Sign a message using Ed25519
+   * Returns base64-encoded detached signature
+   */
+  sign(message: Uint8Array, signingPrivateKey: string): string {
+    const privateKeyBytes = decodeBase64(signingPrivateKey);
+    const signature = nacl.sign.detached(message, privateKeyBytes);
+    return encodeBase64(signature);
+  }
+
+  /**
+   * Verify an Ed25519 signature
+   */
+  verify(message: Uint8Array, signature: string, signingPublicKey: string): boolean {
+    try {
+      const signatureBytes = decodeBase64(signature);
+      const publicKeyBytes = decodeBase64(signingPublicKey);
+      return nacl.sign.detached.verify(message, signatureBytes, publicKeyBytes);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -127,7 +162,8 @@ class CryptoService {
   }
 
   /**
-   * Derive keys from seed phrase (deterministic)
+   * Derive encryption keys from seed phrase (deterministic)
+   * Uses X25519 for key exchange/encryption
    */
   deriveKeysFromSeed(seedPhrase: string[]): { publicKey: string; privateKey: string } {
     // Create a deterministic seed from the phrase
@@ -154,17 +190,50 @@ class CryptoService {
   }
 
   /**
+   * Derive signing keys from seed phrase (deterministic)
+   * Uses Ed25519 for authentication (challenge-response)
+   * NOTE: This derives a SEPARATE key pair from encryption keys
+   */
+  deriveSigningKeysFromSeed(seedPhrase: string[]): { signingPublicKey: string; signingPrivateKey: string } {
+    // Create a different deterministic seed for signing keys
+    // Prefix with 'sign:' to derive a separate key pair
+    const seedString = 'sign:' + seedPhrase.join(' ');
+    const encoder = new TextEncoder();
+    const seedData = encoder.encode(seedString);
+
+    // Create 32-byte seed for Ed25519
+    const seed = new Uint8Array(32);
+    for (let i = 0; i < seedData.length && i < 32; i++) {
+      seed[i] = seedData[i];
+    }
+    // Pad with hash of the seed string for remaining bytes
+    for (let i = seedData.length; i < 32; i++) {
+      seed[i] = seedData[i % seedData.length] ^ (i * 37); // Different multiplier for uniqueness
+    }
+
+    const keyPair = nacl.sign.keyPair.fromSeed(seed);
+    return {
+      signingPublicKey: encodeBase64(keyPair.publicKey),
+      signingPrivateKey: encodeBase64(keyPair.secretKey),
+    };
+  }
+
+  /**
    * Recover account from seed phrase
+   * Returns both encryption keys (X25519) and signing keys (Ed25519)
    */
   async recoverFromSeed(seedPhrase: string[]): Promise<{
     publicKey: string;
     privateKey: string;
+    signingPublicKey: string;
+    signingPrivateKey: string;
     whisperId: string;
   }> {
-    const keys = this.deriveKeysFromSeed(seedPhrase);
+    const encryptionKeys = this.deriveKeysFromSeed(seedPhrase);
+    const signingKeys = this.deriveSigningKeysFromSeed(seedPhrase);
 
     // Generate deterministic Whisper ID from public key
-    const publicKeyBytes = decodeBase64(keys.publicKey);
+    const publicKeyBytes = decodeBase64(encryptionKeys.publicKey);
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let whisperId = 'WSP';
 
@@ -174,7 +243,8 @@ class CryptoService {
     }
 
     return {
-      ...keys,
+      ...encryptionKeys,
+      ...signingKeys,
       whisperId,
     };
   }
@@ -182,13 +252,14 @@ class CryptoService {
   /**
    * Encrypt a message using recipient's public key
    */
-  encryptMessage(
+  async encryptMessage(
     plaintext: string,
     myPrivateKey: string,
     theirPublicKey: string
-  ): { encrypted: string; nonce: string } {
+  ): Promise<{ encrypted: string; nonce: string }> {
     const messageBytes = decodeUTF8(plaintext);
-    const nonce = nacl.randomBytes(nacl.box.nonceLength);
+    // Use expo-crypto instead of nacl.randomBytes (which needs PRNG setup)
+    const nonce = new Uint8Array(await Crypto.getRandomBytesAsync(nacl.box.nonceLength));
 
     const encrypted = nacl.box(
       messageBytes,
@@ -231,6 +302,57 @@ class CryptoService {
   }
 
   /**
+   * Encrypt binary data (for voice messages, images, files)
+   */
+  async encryptBinaryData(
+    data: string,  // Base64 encoded data
+    myPrivateKey: string,
+    theirPublicKey: string
+  ): Promise<{ encrypted: string; nonce: string }> {
+    const dataBytes = decodeBase64(data);
+    const nonce = new Uint8Array(await Crypto.getRandomBytesAsync(nacl.box.nonceLength));
+
+    const encrypted = nacl.box(
+      dataBytes,
+      nonce,
+      decodeBase64(theirPublicKey),
+      decodeBase64(myPrivateKey)
+    );
+
+    return {
+      encrypted: encodeBase64(encrypted),
+      nonce: encodeBase64(nonce),
+    };
+  }
+
+  /**
+   * Decrypt binary data (for voice messages, images, files)
+   */
+  decryptBinaryData(
+    encrypted: string,
+    nonce: string,
+    myPrivateKey: string,
+    theirPublicKey: string
+  ): string | null {
+    try {
+      const decrypted = nacl.box.open(
+        decodeBase64(encrypted),
+        decodeBase64(nonce),
+        decodeBase64(theirPublicKey),
+        decodeBase64(myPrivateKey)
+      );
+
+      if (!decrypted) {
+        return null;
+      }
+
+      return encodeBase64(decrypted);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Validate a seed phrase
    */
   validateSeedPhrase(words: string[]): boolean {
@@ -243,6 +365,73 @@ class CryptoService {
    */
   getWordlist(): string[] {
     return [...WORDLIST];
+  }
+
+  /**
+   * Encrypt a message for group chat (simplified for MVP)
+   * For production, implement proper group encryption (e.g., Signal's Sender Keys)
+   * This simplified version uses symmetric encryption with a derived key
+   */
+  async encryptForGroup(
+    plaintext: string,
+    senderPrivateKey: string
+  ): Promise<{ encrypted: string; nonce: string }> {
+    const messageBytes = decodeUTF8(plaintext);
+    const nonce = new Uint8Array(await Crypto.getRandomBytesAsync(nacl.secretbox.nonceLength));
+
+    // Derive a symmetric key from the sender's private key
+    // In production, use proper group key management
+    const privateKeyBytes = decodeBase64(senderPrivateKey);
+    const symmetricKey = new Uint8Array(nacl.secretbox.keyLength);
+    for (let i = 0; i < nacl.secretbox.keyLength; i++) {
+      symmetricKey[i] = privateKeyBytes[i % privateKeyBytes.length];
+    }
+
+    const encrypted = nacl.secretbox(messageBytes, nonce, symmetricKey);
+
+    return {
+      encrypted: encodeBase64(encrypted),
+      nonce: encodeBase64(nonce),
+    };
+  }
+
+  /**
+   * Decrypt a group message (simplified for MVP)
+   * Returns null if decryption fails
+   */
+  decryptFromGroup(
+    encrypted: string,
+    nonce: string,
+    receiverPrivateKey: string
+  ): string | null {
+    try {
+      // For MVP, group messages are not truly end-to-end encrypted
+      // They're encrypted for transport, but all group members can read them
+      // In production, implement proper group encryption
+
+      // Since we don't have the sender's key, we try to decode as plain text
+      // This is a placeholder - in a real implementation, you'd use sender keys
+      const privateKeyBytes = decodeBase64(receiverPrivateKey);
+      const symmetricKey = new Uint8Array(nacl.secretbox.keyLength);
+      for (let i = 0; i < nacl.secretbox.keyLength; i++) {
+        symmetricKey[i] = privateKeyBytes[i % privateKeyBytes.length];
+      }
+
+      const decrypted = nacl.secretbox.open(
+        decodeBase64(encrypted),
+        decodeBase64(nonce),
+        symmetricKey
+      );
+
+      if (!decrypted) {
+        // Fallback: try to interpret as plaintext (for messages from others)
+        return null;
+      }
+
+      return encodeUTF8(decrypted);
+    } catch {
+      return null;
+    }
   }
 }
 

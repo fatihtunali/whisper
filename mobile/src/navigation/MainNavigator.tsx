@@ -14,6 +14,20 @@ import SettingsScreen from '../screens/SettingsScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import QRScannerScreen from '../screens/QRScannerScreen';
 import MyQRScreen from '../screens/MyQRScreen';
+import TermsScreen from '../screens/TermsScreen';
+import PrivacyScreen from '../screens/PrivacyScreen';
+import ChildSafetyScreen from '../screens/ChildSafetyScreen';
+import AboutScreen from '../screens/AboutScreen';
+import ForwardMessageScreen from '../screens/ForwardMessageScreen';
+import VideoCallScreen from '../screens/VideoCallScreen';
+import CallScreen from '../screens/CallScreen';
+// Group screens
+import CreateGroupScreen from '../screens/CreateGroupScreen';
+import GroupChatScreen from '../screens/GroupChatScreen';
+import GroupInfoScreen from '../screens/GroupInfoScreen';
+import AddGroupMemberScreen from '../screens/AddGroupMemberScreen';
+// Settings screens
+import SetupPinScreen from '../screens/SetupPinScreen';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -97,6 +111,74 @@ export default function MainNavigator() {
       <Stack.Screen
         name="Profile"
         component={ProfileScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="Terms"
+        component={TermsScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="Privacy"
+        component={PrivacyScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="ChildSafety"
+        component={ChildSafetyScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="About"
+        component={AboutScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="ForwardMessage"
+        component={ForwardMessageScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="VideoCall"
+        component={VideoCallScreen}
+        options={{
+          presentation: 'fullScreenModal',
+          animation: 'fade',
+        }}
+      />
+      <Stack.Screen
+        name="Call"
+        component={CallScreen}
+        options={{
+          presentation: 'fullScreenModal',
+          animation: 'fade',
+        }}
+      />
+      {/* Group screens */}
+      <Stack.Screen
+        name="CreateGroup"
+        component={CreateGroupScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="GroupChat"
+        component={GroupChatScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="GroupInfo"
+        component={GroupInfoScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <Stack.Screen
+        name="AddGroupMember"
+        component={AddGroupMemberScreen}
+        options={{ presentation: 'modal' }}
+      />
+      {/* Settings screens */}
+      <Stack.Screen
+        name="SetupPin"
+        component={SetupPinScreen}
         options={{ presentation: 'modal' }}
       />
     </Stack.Navigator>

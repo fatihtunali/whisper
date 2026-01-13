@@ -7,12 +7,39 @@ export interface User {
 }
 
 export interface LocalUser extends User {
-  privateKey: string;     // Base64 encoded, stored securely
-  seedPhrase: string[];   // 12 words
+  privateKey: string;           // X25519 Base64 encoded, stored securely (encryption)
+  signingPublicKey: string;     // Ed25519 Base64 encoded (authentication)
+  signingPrivateKey: string;    // Ed25519 Base64 encoded, stored securely (authentication)
+  seedPhrase: string[];         // 12 words
 }
 
 // Message types
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+
+export interface MessageReplyTo {
+  messageId: string;
+  content: string;
+  senderId: string;
+}
+
+export interface FileAttachment {
+  name: string;
+  size: number;
+  mimeType: string;
+  uri: string;            // Local URI for display/download
+}
+
+export interface ImageAttachment {
+  uri: string;            // Local URI for display
+  width: number;
+  height: number;
+  base64?: string;        // Base64 encoded image data (for sending)
+}
+
+export interface VoiceMessage {
+  uri: string;            // Local URI for playback
+  duration: number;       // Duration in milliseconds
+}
 
 export interface Message {
   id: string;
@@ -21,6 +48,15 @@ export interface Message {
   content: string;        // Plaintext (after decryption)
   timestamp: number;      // Unix timestamp
   status: MessageStatus;
+  replyTo?: MessageReplyTo;  // Reference to replied message
+  file?: FileAttachment;  // Optional file attachment
+  image?: ImageAttachment; // Optional image attachment
+  voice?: VoiceMessage;   // Optional voice message
+  reactions?: { [oderId: string]: string }; // oderId -> emoji (userId who reacted -> their emoji)
+  expiresAt?: number;     // Unix timestamp when message should auto-delete (for disappearing messages)
+  groupId?: string;       // For group messages: GRP-XXXX-XXXX-XXXX
+  senderName?: string;    // Cached sender name for group messages display
+  isForwarded?: boolean;  // Whether the message was forwarded
 }
 
 export interface EncryptedMessage {
@@ -30,6 +66,20 @@ export interface EncryptedMessage {
   encryptedContent: string;  // Base64 encoded
   nonce: string;             // Base64 encoded
   timestamp: number;
+  encryptedFile?: string;    // Base64 encoded encrypted file data
+  fileMetadata?: {           // Unencrypted file metadata
+    name: string;
+    size: number;
+    mimeType: string;
+  };
+  encryptedVoice?: string;   // Base64 encoded encrypted voice data
+  voiceDuration?: number;    // Voice message duration in milliseconds
+  encryptedImage?: string;   // Base64 encoded encrypted image data
+  imageNonce?: string;       // Separate nonce for image encryption
+  imageMetadata?: {          // Unencrypted image metadata
+    width: number;
+    height: number;
+  };
 }
 
 // Contact types
@@ -40,6 +90,26 @@ export interface Contact {
   nickname?: string;
   addedAt: number;        // Unix timestamp
   isBlocked?: boolean;
+  isMessageRequest?: boolean; // True if this is a pending message request (not yet accepted)
+}
+
+// Group types
+export interface Group {
+  id: string;             // GRP-XXXX-XXXX-XXXX format
+  name: string;
+  members: string[];      // Array of whisperIds
+  createdBy: string;      // WhisperId of creator
+  createdAt: number;      // Unix timestamp
+  avatar?: string;        // Optional avatar URL or base64
+}
+
+// Group conversation type
+export interface GroupConversation {
+  id: string;             // Same as group id
+  groupId: string;
+  lastMessage?: Message;
+  unreadCount: number;
+  updatedAt: number;      // Unix timestamp
 }
 
 // Conversation types
@@ -49,6 +119,7 @@ export interface Conversation {
   lastMessage?: Message;
   unreadCount: number;
   updatedAt: number;      // Unix timestamp
+  disappearAfter?: number; // Milliseconds after which messages auto-delete (0 or undefined = off)
 }
 
 // WebSocket message types
@@ -87,11 +158,42 @@ export type MainTabParamList = {
 export type RootStackParamList = {
   MainTabs: undefined;
   Chat: { contactId: string };
+  Call: { contactId: string; isIncoming: boolean; callId?: string };
+  VideoCall: { contactId: string; isIncoming: boolean; callId?: string };
   AddContact: undefined;
   QRScanner: undefined;
   MyQR: undefined;
   Profile: undefined;
+  Terms: undefined;
+  Privacy: undefined;
+  ChildSafety: undefined;
+  About: undefined;
+  // Group screens
+  CreateGroup: undefined;
+  GroupChat: { groupId: string };
+  GroupInfo: { groupId: string };
+  AddGroupMember: { groupId: string };
+  // Message forwarding
+  ForwardMessage: { content: string; originalSenderId?: string };
+  // App lock screens
+  SetupPin: { isChangingPin?: boolean };
 };
+
+// Call types
+export type CallState = 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended';
+
+export interface CallSession {
+  callId: string;
+  contactId: string;
+  isIncoming: boolean;
+  isVideo: boolean;
+  state: CallState;
+  startTime?: number;
+  isMuted: boolean;
+  isSpeakerOn: boolean;
+  isCameraOn: boolean;
+  isFrontCamera: boolean;
+}
 
 // App state
 export interface AppState {

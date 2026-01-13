@@ -3,6 +3,7 @@ import { LocalUser } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { cryptoService } from '../crypto/CryptoService';
 import { messagingService } from '../services/MessagingService';
+import { notificationService } from '../services/NotificationService';
 
 interface AuthContextType {
   user: LocalUser | null;
@@ -36,16 +37,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Connect to messaging service when user is loaded
+  // Initialize notifications and connect to messaging service when user is loaded
   useEffect(() => {
     if (user) {
-      console.log('[AuthContext] Connecting to messaging service...');
-      messagingService.connect(user);
+      const initializeAndConnect = async () => {
+        // Initialize push notifications
+        console.log('[AuthContext] Initializing push notifications...');
+        const pushToken = await notificationService.initialize();
+        messagingService.setPushToken(pushToken);
+
+        // Set up notification listeners
+        notificationService.setupListeners(
+          // On notification received while app is open
+          (notification) => {
+            console.log('[AuthContext] Notification received in foreground');
+          },
+          // On notification tapped
+          (response) => {
+            console.log('[AuthContext] Notification tapped');
+            // Could navigate to specific chat here based on response.notification.request.content.data
+          }
+        );
+
+        // Connect to messaging service
+        console.log('[AuthContext] Connecting to messaging service...');
+        messagingService.connect(user);
+      };
+
+      initializeAndConnect();
+
+      return () => {
+        notificationService.removeListeners();
+      };
     }
   }, [user]);
 
   const loadUser = async () => {
     try {
+      // Clean up expired disappearing messages on app start
+      await secureStorage.cleanupExpiredMessages();
+
       const storedUser = await secureStorage.getUser();
       setUser(storedUser);
     } catch (error) {
@@ -59,16 +90,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Generate seed phrase first
     const seedPhrase = await cryptoService.generateSeedPhrase();
 
-    // Derive keys from seed (for deterministic recovery)
-    const keys = cryptoService.deriveKeysFromSeed(seedPhrase);
-
-    // Generate Whisper ID from public key (deterministic)
+    // Derive all keys from seed (for deterministic recovery)
+    // This includes both encryption keys (X25519) and signing keys (Ed25519)
     const recovered = await cryptoService.recoverFromSeed(seedPhrase);
 
     const newUser: LocalUser = {
       whisperId: recovered.whisperId,
-      publicKey: keys.publicKey,
-      privateKey: keys.privateKey,
+      publicKey: recovered.publicKey,
+      privateKey: recovered.privateKey,
+      signingPublicKey: recovered.signingPublicKey,
+      signingPrivateKey: recovered.signingPrivateKey,
       seedPhrase,
       username,
       createdAt: Date.now(),
@@ -86,13 +117,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Invalid seed phrase');
     }
 
-    // Recover keys and Whisper ID
+    // Recover all keys (encryption + signing) and Whisper ID
     const recovered = await cryptoService.recoverFromSeed(seedPhrase);
 
     const recoveredUser: LocalUser = {
       whisperId: recovered.whisperId,
       publicKey: recovered.publicKey,
       privateKey: recovered.privateKey,
+      signingPublicKey: recovered.signingPublicKey,
+      signingPrivateKey: recovered.signingPrivateKey,
       seedPhrase,
       createdAt: Date.now(),
     };

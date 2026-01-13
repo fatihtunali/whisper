@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws';
 import { connectionManager } from '../websocket/ConnectionManager';
 import { messageQueue } from './MessageQueue';
+import { pushService } from './PushService';
 import {
   ServerMessage,
   MessageReceivedMessage,
@@ -35,6 +36,10 @@ class MessageRouter {
   ): 'delivered' | 'pending' | 'error' {
     const recipientSocket = connectionManager.getSocket(toWhisperId);
 
+    // Get sender's public key for recipients who don't have sender in contacts
+    const sender = connectionManager.get(fromWhisperId);
+    const senderPublicKey = sender?.publicKey;
+
     if (recipientSocket) {
       // Recipient is online - deliver immediately
       const message: MessageReceivedMessage = {
@@ -45,6 +50,7 @@ class MessageRouter {
           encryptedContent,
           nonce,
           timestamp: Date.now(),
+          senderPublicKey, // Include sender's public key for message requests
         },
       };
 
@@ -55,8 +61,16 @@ class MessageRouter {
     }
 
     // Recipient is offline or delivery failed - queue the message
-    messageQueue.enqueue(messageId, fromWhisperId, toWhisperId, encryptedContent, nonce);
+    messageQueue.enqueue(messageId, fromWhisperId, toWhisperId, encryptedContent, nonce, senderPublicKey);
     console.log(`[MessageRouter] Queued ${messageId} for offline user ${toWhisperId}`);
+
+    // Send push notification if recipient has a push token
+    const pushToken = connectionManager.getPushToken(toWhisperId);
+    if (pushToken) {
+      pushService.sendMessageNotification(pushToken, fromWhisperId)
+        .catch(err => console.error('[MessageRouter] Push notification failed:', err));
+    }
+
     return 'pending';
   }
 
@@ -123,7 +137,11 @@ class MessageRouter {
           encryptedContent: msg.encryptedContent,
           nonce: msg.nonce,
           timestamp: msg.timestamp,
+          senderPublicKey: msg.senderPublicKey,
         })),
+        cursor: null,
+        nextCursor: null,
+        hasMore: false,
       },
     };
 

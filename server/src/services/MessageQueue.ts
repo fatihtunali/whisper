@@ -13,7 +13,8 @@ class MessageQueue {
     fromWhisperId: string,
     toWhisperId: string,
     encryptedContent: string,
-    nonce: string
+    nonce: string,
+    senderPublicKey?: string
   ): void {
     const message: PendingMessage = {
       id: messageId,
@@ -23,6 +24,7 @@ class MessageQueue {
       nonce,
       timestamp: Date.now(),
       expiresAt: Date.now() + MESSAGE_TTL_MS,
+      senderPublicKey,
     };
 
     const userQueue = this.queue.get(toWhisperId) || [];
@@ -38,6 +40,51 @@ class MessageQueue {
     // Filter out expired messages
     const now = Date.now();
     return userQueue.filter(msg => msg.expiresAt > now);
+  }
+
+  /**
+   * Get pending messages with cursor-based pagination
+   * Messages are returned in FIFO order (oldest first)
+   * @param whisperId User's Whisper ID
+   * @param cursor Message ID to start after (null for first page)
+   * @param limit Maximum number of messages to return (default 50)
+   */
+  getPendingPaginated(
+    whisperId: string,
+    cursor: string | null,
+    limit: number = 50
+  ): {
+    messages: PendingMessage[];
+    cursor: string | null;
+    nextCursor: string | null;
+    hasMore: boolean;
+  } {
+    const allMessages = this.getPending(whisperId);
+
+    // Find start index based on cursor
+    let startIndex = 0;
+    if (cursor) {
+      const cursorIndex = allMessages.findIndex(msg => msg.id === cursor);
+      if (cursorIndex !== -1) {
+        startIndex = cursorIndex + 1; // Start after the cursor
+      }
+    }
+
+    // Get the page of messages
+    const pageMessages = allMessages.slice(startIndex, startIndex + limit);
+    const hasMore = startIndex + limit < allMessages.length;
+
+    // Determine next cursor (last message ID in this page)
+    const nextCursor = pageMessages.length > 0 && hasMore
+      ? pageMessages[pageMessages.length - 1].id
+      : null;
+
+    return {
+      messages: pageMessages,
+      cursor: cursor,
+      nextCursor,
+      hasMore,
+    };
   }
 
   // Remove all pending messages for a user (after delivery)

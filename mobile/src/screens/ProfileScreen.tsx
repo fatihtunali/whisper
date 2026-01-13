@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale, scaleFontSize } from '../utils/responsive';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -211,7 +212,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   headerSpacer: {
-    width: 30,
+    width: moderateScale(30),
   },
   content: {
     padding: spacing.lg,
@@ -221,15 +222,15 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   avatar: {
-    width: 100,
-    height: 100,
+    width: moderateScale(100),
+    height: moderateScale(100),
     backgroundColor: colors.primary,
     borderRadius: borderRadius.full,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: {
-    fontSize: 40,
+    fontSize: scaleFontSize(40),
     color: colors.text,
   },
   field: {
@@ -316,7 +317,7 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: colors.textMuted,
     marginRight: spacing.xs,
-    minWidth: 16,
+    minWidth: moderateScale(16),
   },
   seedWordText: {
     fontSize: fontSize.sm,

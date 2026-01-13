@@ -1,11 +1,19 @@
 import { WebSocket } from 'ws';
-import { ConnectedClient } from '../types';
+import { ConnectedClient, PrivacyPrefs } from '../types';
 
 class ConnectionManager {
   private clients: Map<string, ConnectedClient> = new Map();
+  private pushTokens: Map<string, string> = new Map(); // Persist push tokens even when offline
 
   // Register a new client connection
-  register(whisperId: string, publicKey: string, socket: WebSocket): void {
+  register(
+    whisperId: string,
+    publicKey: string,
+    signingPublicKey: string,
+    socket: WebSocket,
+    pushToken?: string,
+    prefs?: PrivacyPrefs
+  ): void {
     // If client already connected, close old connection
     const existing = this.clients.get(whisperId);
     if (existing && existing.socket !== socket) {
@@ -16,13 +24,24 @@ class ConnectionManager {
     const client: ConnectedClient = {
       whisperId,
       publicKey,
+      signingPublicKey,
       socket,
       connectedAt: Date.now(),
       lastPing: Date.now(),
+      pushToken,
+      prefs,
     };
 
     this.clients.set(whisperId, client);
-    console.log(`[ConnectionManager] Registered: ${whisperId} (${this.clients.size} total)`);
+
+    // Store push token separately (persists when user goes offline)
+    if (pushToken) {
+      this.pushTokens.set(whisperId, pushToken);
+      console.log(`[ConnectionManager] Stored push token for ${whisperId}`);
+    }
+
+    const hidden = prefs?.hideOnlineStatus ? ' [hidden]' : '';
+    console.log(`[ConnectionManager] Registered: ${whisperId} (${this.clients.size} total)${hidden}`);
   }
 
   // Remove a client connection
@@ -54,6 +73,21 @@ class ConnectionManager {
     const client = this.clients.get(whisperId);
     if (!client) return false;
     return client.socket.readyState === WebSocket.OPEN;
+  }
+
+  // Check if a client appears online (respects hideOnlineStatus setting)
+  appearsOnline(whisperId: string): boolean {
+    const client = this.clients.get(whisperId);
+    if (!client) return false;
+    if (client.prefs?.hideOnlineStatus) return false;
+    return client.socket.readyState === WebSocket.OPEN;
+  }
+
+  // Check if a client has hidden their online status
+  isOnlineStatusHidden(whisperId: string): boolean {
+    const client = this.clients.get(whisperId);
+    if (!client) return false;
+    return client.prefs?.hideOnlineStatus === true;
   }
 
   // Get socket for a client
@@ -91,6 +125,11 @@ class ConnectionManager {
   // Get all connected Whisper IDs
   getAllIds(): string[] {
     return Array.from(this.clients.keys());
+  }
+
+  // Get push token for a user (even if offline)
+  getPushToken(whisperId: string): string | null {
+    return this.pushTokens.get(whisperId) || null;
   }
 
   // Clean up stale connections (no ping for 2 minutes)

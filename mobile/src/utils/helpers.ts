@@ -6,6 +6,21 @@ export function generateId(): string {
 }
 
 /**
+ * Generate a unique Group ID in format GRP-XXXX-XXXX-XXXX
+ */
+export function generateGroupId(): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const part = () => {
+    let result = '';
+    for (let i = 0; i < 4; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  };
+  return `GRP-${part()}-${part()}-${part()}`;
+}
+
+/**
  * Format timestamp to readable time
  */
 export function formatTime(timestamp: number): string {

@@ -14,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList, Contact } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
+import { moderateScale, scaleFontSize } from '../utils/responsive';
 import { isValidWhisperId } from '../utils/helpers';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -62,8 +63,8 @@ export default function AddContactScreen() {
 
       await secureStorage.addContact(contact);
 
-      Alert.alert('Success', 'Contact added successfully', [
-        { text: 'OK', onPress: () => navigation.goBack() },
+      Alert.alert('Success', 'Contact added! Start chatting now.', [
+        { text: 'OK', onPress: () => navigation.replace('Chat', { contactId: contact.whisperId }) },
       ]);
     } catch (err) {
       setError('Failed to add contact. Please try again.');
@@ -184,7 +185,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   headerSpacer: {
-    width: 50,
+    width: moderateScale(50),
   },
   content: {
     flex: 1,
@@ -202,7 +203,7 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   scanButtonIcon: {
-    fontSize: 24,
+    fontSize: scaleFontSize(24),
     marginRight: spacing.sm,
   },
   scanButtonText: {
@@ -217,7 +218,7 @@ const styles = StyleSheet.create({
   },
   dividerLine: {
     flex: 1,
-    height: 1,
+    height: moderateScale(1),
     backgroundColor: colors.border,
   },
   dividerText: {
@@ -244,7 +245,7 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   inputMultiline: {
-    minHeight: 80,
+    minHeight: moderateScale(80),
     textAlignVertical: 'top',
   },
   error: {

@@ -1,39 +1,144 @@
-import { LocalUser, Message, Contact } from '../types';
+import { LocalUser, Message, Contact, MessageReplyTo, VoiceMessage, ImageAttachment, FileAttachment, Group } from '../types';
 import { cryptoService } from '../crypto/CryptoService';
 import { secureStorage } from '../storage/SecureStorage';
-import { generateId } from '../utils/helpers';
+import { generateId, generateGroupId } from '../utils/helpers';
 
 const WS_URL = 'wss://sarjmobile.com/ws';
 const RECONNECT_DELAY = 3000;
-const PING_INTERVAL = 30000;
+const PING_INTERVAL = 15000; // Reduced from 30s to 15s to keep connection alive
 
 type MessageHandler = (message: Message, contact: Contact) => void;
 type StatusHandler = (messageId: string, status: Message['status']) => void;
 type ConnectionHandler = (connected: boolean) => void;
+type ReactionHandler = (messageId: string, oderId: string, emoji: string | null) => void;
+type TypingHandler = (fromWhisperId: string, isTyping: boolean) => void;
+type GroupMessageHandler = (message: Message, group: Group) => void;
+type GroupUpdateHandler = (groupId: string, updates: Partial<Group>) => void;
 
 class MessagingService {
   private ws: WebSocket | null = null;
   private user: LocalUser | null = null;
+  private pushToken: string | null = null;
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
   private isConnecting = false;
 
-  // Event handlers
-  private onMessageReceived: MessageHandler | null = null;
-  private onStatusUpdate: StatusHandler | null = null;
-  private onConnectionChange: ConnectionHandler | null = null;
+  // Event handlers - now arrays to support multiple listeners
+  private messageHandlers: Set<MessageHandler> = new Set();
+  private statusHandlers: Set<StatusHandler> = new Set();
+  private connectionHandlers: Set<ConnectionHandler> = new Set();
+  private reactionHandlers: Set<ReactionHandler> = new Set();
+  private typingHandlers: Set<TypingHandler> = new Set();
+  private groupMessageHandlers: Set<GroupMessageHandler> = new Set();
+  private groupUpdateHandlers: Set<GroupUpdateHandler> = new Set();
 
-  // Set event handlers
+  // Add/remove event handlers
+  addMessageHandler(handler: MessageHandler): void {
+    this.messageHandlers.add(handler);
+  }
+
+  removeMessageHandler(handler: MessageHandler): void {
+    this.messageHandlers.delete(handler);
+  }
+
+  addStatusHandler(handler: StatusHandler): void {
+    this.statusHandlers.add(handler);
+  }
+
+  removeStatusHandler(handler: StatusHandler): void {
+    this.statusHandlers.delete(handler);
+  }
+
+  addConnectionHandler(handler: ConnectionHandler): void {
+    this.connectionHandlers.add(handler);
+  }
+
+  removeConnectionHandler(handler: ConnectionHandler): void {
+    this.connectionHandlers.delete(handler);
+  }
+
+  addReactionHandler(handler: ReactionHandler): void {
+    this.reactionHandlers.add(handler);
+  }
+
+  removeReactionHandler(handler: ReactionHandler): void {
+    this.reactionHandlers.delete(handler);
+  }
+
+  addTypingHandler(handler: TypingHandler): void {
+    this.typingHandlers.add(handler);
+  }
+
+  removeTypingHandler(handler: TypingHandler): void {
+    this.typingHandlers.delete(handler);
+  }
+
+  addGroupMessageHandler(handler: GroupMessageHandler): void {
+    this.groupMessageHandlers.add(handler);
+  }
+
+  removeGroupMessageHandler(handler: GroupMessageHandler): void {
+    this.groupMessageHandlers.delete(handler);
+  }
+
+  addGroupUpdateHandler(handler: GroupUpdateHandler): void {
+    this.groupUpdateHandlers.add(handler);
+  }
+
+  removeGroupUpdateHandler(handler: GroupUpdateHandler): void {
+    this.groupUpdateHandlers.delete(handler);
+  }
+
+  // Legacy single handler methods (for backwards compatibility)
   setOnMessageReceived(handler: MessageHandler | null): void {
-    this.onMessageReceived = handler;
+    // Clear all and add single handler
+    this.messageHandlers.clear();
+    if (handler) this.messageHandlers.add(handler);
   }
 
   setOnStatusUpdate(handler: StatusHandler | null): void {
-    this.onStatusUpdate = handler;
+    this.statusHandlers.clear();
+    if (handler) this.statusHandlers.add(handler);
   }
 
   setOnConnectionChange(handler: ConnectionHandler | null): void {
-    this.onConnectionChange = handler;
+    this.connectionHandlers.clear();
+    if (handler) this.connectionHandlers.add(handler);
+  }
+
+  // Notify all handlers
+  private notifyMessageHandlers(message: Message, contact: Contact): void {
+    this.messageHandlers.forEach(handler => handler(message, contact));
+  }
+
+  private notifyStatusHandlers(messageId: string, status: Message['status']): void {
+    this.statusHandlers.forEach(handler => handler(messageId, status));
+  }
+
+  private notifyConnectionHandlers(connected: boolean): void {
+    this.connectionHandlers.forEach(handler => handler(connected));
+  }
+
+  private notifyReactionHandlers(messageId: string, oderId: string, emoji: string | null): void {
+    this.reactionHandlers.forEach(handler => handler(messageId, oderId, emoji));
+  }
+
+  private notifyTypingHandlers(fromWhisperId: string, isTyping: boolean): void {
+    this.typingHandlers.forEach(handler => handler(fromWhisperId, isTyping));
+  }
+
+  private notifyGroupMessageHandlers(message: Message, group: Group): void {
+    this.groupMessageHandlers.forEach(handler => handler(message, group));
+  }
+
+  private notifyGroupUpdateHandlers(groupId: string, updates: Partial<Group>): void {
+    this.groupUpdateHandlers.forEach(handler => handler(groupId, updates));
+  }
+
+  // Set push token (call before connect)
+  setPushToken(token: string | null): void {
+    this.pushToken = token;
+    console.log('[MessagingService] Push token set:', token ? 'yes' : 'no');
   }
 
   // Connect to WebSocket server
@@ -55,7 +160,7 @@ class MessagingService {
         this.isConnecting = false;
         this.register();
         this.startPing();
-        this.onConnectionChange?.(true);
+        this.notifyConnectionHandlers(true);
       };
 
       this.ws.onmessage = (event) => {
@@ -66,7 +171,7 @@ class MessagingService {
         console.log('[MessagingService] Disconnected');
         this.isConnecting = false;
         this.stopPing();
-        this.onConnectionChange?.(false);
+        this.notifyConnectionHandlers(false);
         this.scheduleReconnect();
       };
 
@@ -99,7 +204,7 @@ class MessagingService {
       this.ws = null;
     }
 
-    this.onConnectionChange?.(false);
+    this.notifyConnectionHandlers(false);
   }
 
   // Check if connected
@@ -108,7 +213,7 @@ class MessagingService {
   }
 
   // Send a message to a contact
-  async sendMessage(contact: Contact, content: string): Promise<Message> {
+  async sendMessage(contact: Contact, content: string, replyTo?: MessageReplyTo): Promise<Message> {
     if (!this.user) {
       throw new Error('Not authenticated');
     }
@@ -123,6 +228,7 @@ class MessagingService {
       content,
       timestamp: Date.now(),
       status: 'sending',
+      ...(replyTo && { replyTo }),
     };
 
     // Save to local storage first
@@ -133,7 +239,7 @@ class MessagingService {
     });
 
     // Encrypt the message
-    const { encrypted, nonce } = cryptoService.encryptMessage(
+    const { encrypted, nonce } = await cryptoService.encryptMessage(
       content,
       this.user.privateKey,
       contact.publicKey
@@ -163,6 +269,215 @@ class MessagingService {
     return message;
   }
 
+  // Send a voice message to a contact
+  async sendVoiceMessage(
+    contact: Contact,
+    voiceBase64: string,
+    duration: number,
+    localUri: string
+  ): Promise<Message> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    const messageId = generateId();
+
+    // Create local message with voice attachment
+    const voice: VoiceMessage = {
+      uri: localUri,
+      duration,
+    };
+
+    const message: Message = {
+      id: messageId,
+      conversationId: contact.whisperId,
+      senderId: this.user.whisperId,
+      content: '', // Voice messages have no text content
+      timestamp: Date.now(),
+      status: 'sending',
+      voice,
+    };
+
+    // Save to local storage first
+    await secureStorage.addMessage(contact.whisperId, message);
+    await secureStorage.updateConversation(contact.whisperId, {
+      lastMessage: { ...message, content: 'Voice message' },
+      updatedAt: Date.now(),
+    });
+
+    // Encrypt the voice data
+    const { encrypted: encryptedVoice, nonce } = await cryptoService.encryptBinaryData(
+      voiceBase64,
+      this.user.privateKey,
+      contact.publicKey
+    );
+
+    // Send via WebSocket
+    if (this.isConnected()) {
+      this.send({
+        type: 'send_message',
+        payload: {
+          messageId,
+          toWhisperId: contact.whisperId,
+          encryptedContent: '', // No text content for voice
+          nonce,
+          encryptedVoice,
+          voiceDuration: duration,
+        },
+      });
+
+      // Update status to 'sent'
+      message.status = 'sent';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+    } else {
+      message.status = 'failed';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
+    }
+
+    return message;
+  }
+
+  // Send an image message to a contact
+  async sendImageMessage(
+    contact: Contact,
+    imageBase64: string,
+    width: number,
+    height: number,
+    localUri: string
+  ): Promise<Message> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    const messageId = generateId();
+
+    // Create local message with image attachment
+    const image: ImageAttachment = {
+      uri: localUri,
+      width,
+      height,
+    };
+
+    const message: Message = {
+      id: messageId,
+      conversationId: contact.whisperId,
+      senderId: this.user.whisperId,
+      content: '', // Image messages have no text content
+      timestamp: Date.now(),
+      status: 'sending',
+      image,
+    };
+
+    // Save to local storage first
+    await secureStorage.addMessage(contact.whisperId, message);
+    await secureStorage.updateConversation(contact.whisperId, {
+      lastMessage: { ...message, content: 'Photo' },
+      updatedAt: Date.now(),
+    });
+
+    // Encrypt the image data
+    const { encrypted: encryptedImage, nonce } = await cryptoService.encryptBinaryData(
+      imageBase64,
+      this.user.privateKey,
+      contact.publicKey
+    );
+
+    // Send via WebSocket
+    if (this.isConnected()) {
+      this.send({
+        type: 'send_message',
+        payload: {
+          messageId,
+          toWhisperId: contact.whisperId,
+          encryptedContent: '', // No text content for image
+          nonce,
+          encryptedImage,
+          imageMetadata: { width, height },
+        },
+      });
+
+      // Update status to 'sent'
+      message.status = 'sent';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+    } else {
+      message.status = 'failed';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
+    }
+
+    return message;
+  }
+
+  // Send a file message to a contact
+  async sendFileMessage(
+    contact: Contact,
+    file: FileAttachment,
+    fileBase64: string
+  ): Promise<Message> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    const messageId = generateId();
+
+    // Create local message with file attachment
+    const message: Message = {
+      id: messageId,
+      conversationId: contact.whisperId,
+      senderId: this.user.whisperId,
+      content: '', // File messages have no text content
+      timestamp: Date.now(),
+      status: 'sending',
+      file: {
+        name: file.name,
+        size: file.size,
+        mimeType: file.mimeType,
+        uri: file.uri,
+      },
+    };
+
+    // Save to local storage first
+    await secureStorage.addMessage(contact.whisperId, message);
+    await secureStorage.updateConversation(contact.whisperId, {
+      lastMessage: { ...message, content: `File: ${file.name}` },
+      updatedAt: Date.now(),
+    });
+
+    // Encrypt the file data
+    const { encrypted: encryptedFile, nonce } = await cryptoService.encryptBinaryData(
+      fileBase64,
+      this.user.privateKey,
+      contact.publicKey
+    );
+
+    // Send via WebSocket
+    if (this.isConnected()) {
+      this.send({
+        type: 'send_message',
+        payload: {
+          messageId,
+          toWhisperId: contact.whisperId,
+          encryptedContent: '', // No text content for file
+          nonce,
+          encryptedFile,
+          fileMetadata: {
+            name: file.name,
+            size: file.size,
+            mimeType: file.mimeType,
+          },
+        },
+      });
+
+      // Update status to 'sent'
+      message.status = 'sent';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+    } else {
+      message.status = 'failed';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
+    }
+
+    return message;
+  }
+
   // Send a delivery receipt
   async sendDeliveryReceipt(
     toWhisperId: string,
@@ -181,15 +496,336 @@ class MessagingService {
     });
   }
 
+  // Report a user for inappropriate behavior
+  reportUser(
+    reportedWhisperId: string,
+    reason: 'inappropriate_content' | 'harassment' | 'spam' | 'child_safety' | 'other',
+    description?: string
+  ): boolean {
+    if (!this.isConnected()) {
+      console.error('[MessagingService] Cannot report - not connected');
+      return false;
+    }
+
+    this.send({
+      type: 'report_user',
+      payload: {
+        reportedWhisperId,
+        reason,
+        description,
+      },
+    });
+
+    console.log('[MessagingService] Report submitted for', reportedWhisperId, 'reason:', reason);
+    return true;
+  }
+
+  // Send a reaction to a message
+  async sendReaction(
+    toWhisperId: string,
+    messageId: string,
+    emoji: string | null
+  ): Promise<boolean> {
+    if (!this.isConnected() || !this.user) {
+      console.error('[MessagingService] Cannot send reaction - not connected');
+      return false;
+    }
+
+    this.send({
+      type: 'reaction',
+      payload: {
+        messageId,
+        toWhisperId,
+        emoji,
+      },
+    });
+
+    // Update local message with own reaction
+    await secureStorage.updateMessageReaction(toWhisperId, messageId, this.user.whisperId, emoji);
+
+    console.log('[MessagingService] Reaction sent for message', messageId, 'emoji:', emoji);
+    return true;
+  }
+
+  // Send typing status to a contact
+  sendTypingStatus(toWhisperId: string, isTyping: boolean): void {
+    if (!this.isConnected()) return;
+
+    this.send({
+      type: 'typing',
+      payload: {
+        toWhisperId,
+        isTyping,
+      },
+    });
+  }
+
+  // Forward a message to a contact (re-encrypted for the new recipient)
+  async forwardMessage(contact: Contact, content: string): Promise<Message> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    const messageId = generateId();
+
+    // Create local message with isForwarded flag
+    const message: Message = {
+      id: messageId,
+      conversationId: contact.whisperId,
+      senderId: this.user.whisperId,
+      content,
+      timestamp: Date.now(),
+      status: 'sending',
+      isForwarded: true,
+    };
+
+    // Save to local storage first
+    await secureStorage.addMessage(contact.whisperId, message);
+    await secureStorage.updateConversation(contact.whisperId, {
+      lastMessage: message,
+      updatedAt: Date.now(),
+    });
+
+    // Encrypt the message for the new recipient
+    const { encrypted, nonce } = await cryptoService.encryptMessage(
+      content,
+      this.user.privateKey,
+      contact.publicKey
+    );
+
+    // Send via WebSocket
+    if (this.isConnected()) {
+      this.send({
+        type: 'send_message',
+        payload: {
+          messageId,
+          toWhisperId: contact.whisperId,
+          encryptedContent: encrypted,
+          nonce,
+          isForwarded: true,
+        },
+      });
+
+      // Update status to 'sent' (server received it)
+      message.status = 'sent';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+    } else {
+      // Mark as failed if not connected
+      message.status = 'failed';
+      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
+    }
+
+    return message;
+  }
+
+  // ============ GROUP MESSAGING METHODS ============
+
+  // Create a new group
+  async createGroup(name: string, memberIds: string[]): Promise<Group> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    const groupId = generateGroupId();
+    const now = Date.now();
+
+    // Create local group object
+    const group: Group = {
+      id: groupId,
+      name,
+      members: [this.user.whisperId, ...memberIds],
+      createdBy: this.user.whisperId,
+      createdAt: now,
+    };
+
+    // Save to local storage
+    await secureStorage.saveGroup(group);
+
+    // Create group conversation
+    await secureStorage.getOrCreateGroupConversation(groupId);
+
+    // Notify server about new group
+    if (this.isConnected()) {
+      this.send({
+        type: 'create_group',
+        payload: {
+          groupId,
+          name,
+          members: memberIds, // Excluding creator, server adds them
+        },
+      });
+    }
+
+    console.log('[MessagingService] Group created:', groupId);
+    return group;
+  }
+
+  // Send a message to a group
+  async sendGroupMessage(group: Group, content: string): Promise<Message> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    const messageId = generateId();
+    const now = Date.now();
+
+    // Get the current user's name/username for display
+    const senderName = this.user.username || this.user.whisperId;
+
+    // Create local message
+    const message: Message = {
+      id: messageId,
+      conversationId: group.id,
+      senderId: this.user.whisperId,
+      content,
+      timestamp: now,
+      status: 'sending',
+      groupId: group.id,
+      senderName,
+    };
+
+    // Save to local storage
+    await secureStorage.addGroupMessage(group.id, message);
+    await secureStorage.updateGroupConversation(group.id, {
+      lastMessage: message,
+      updatedAt: now,
+    });
+
+    // For group messages, we use a simplified encryption approach for MVP
+    // In production, you'd use proper group encryption (e.g., Signal's group protocol)
+    // For now, we encrypt with the sender's keys for transit
+    const { encrypted, nonce } = await cryptoService.encryptForGroup(
+      content,
+      this.user.privateKey
+    );
+
+    // Send via WebSocket
+    if (this.isConnected()) {
+      this.send({
+        type: 'send_group_message',
+        payload: {
+          groupId: group.id,
+          messageId,
+          encryptedContent: encrypted,
+          nonce,
+          senderName,
+        },
+      });
+
+      // Update status to 'sent'
+      message.status = 'sent';
+      await secureStorage.updateGroupMessageStatus(group.id, messageId, 'sent');
+    } else {
+      message.status = 'failed';
+      await secureStorage.updateGroupMessageStatus(group.id, messageId, 'failed');
+    }
+
+    return message;
+  }
+
+  // Update a group (name, members)
+  async updateGroup(
+    groupId: string,
+    updates: { name?: string; addMembers?: string[]; removeMembers?: string[] }
+  ): Promise<void> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    // Update locally
+    const group = await secureStorage.getGroup(groupId);
+    if (!group) {
+      throw new Error('Group not found');
+    }
+
+    const localUpdates: Partial<Group> = {};
+
+    if (updates.name) {
+      localUpdates.name = updates.name;
+    }
+
+    if (updates.addMembers && updates.addMembers.length > 0) {
+      localUpdates.members = [...new Set([...group.members, ...updates.addMembers])];
+    }
+
+    if (updates.removeMembers && updates.removeMembers.length > 0) {
+      localUpdates.members = (localUpdates.members || group.members).filter(
+        m => !updates.removeMembers!.includes(m)
+      );
+    }
+
+    await secureStorage.updateGroup(groupId, localUpdates);
+
+    // Notify server
+    if (this.isConnected()) {
+      this.send({
+        type: 'update_group',
+        payload: {
+          groupId,
+          ...updates,
+        },
+      });
+    }
+
+    console.log('[MessagingService] Group updated:', groupId);
+  }
+
+  // Leave a group
+  async leaveGroup(groupId: string): Promise<void> {
+    if (!this.user) {
+      throw new Error('Not authenticated');
+    }
+
+    // Remove self from local group
+    const group = await secureStorage.getGroup(groupId);
+    if (group) {
+      const newMembers = group.members.filter(m => m !== this.user!.whisperId);
+
+      if (newMembers.length === 0) {
+        // Last member, delete the group
+        await secureStorage.deleteGroup(groupId);
+      } else {
+        await secureStorage.updateGroup(groupId, { members: newMembers });
+      }
+    }
+
+    // Notify server
+    if (this.isConnected()) {
+      this.send({
+        type: 'leave_group',
+        payload: {
+          groupId,
+        },
+      });
+    }
+
+    console.log('[MessagingService] Left group:', groupId);
+  }
+
+  // ============ END GROUP METHODS ============
+
   // Private: Register with server
-  private register(): void {
+  private async register(): Promise<void> {
     if (!this.user) return;
+
+    // Get privacy settings
+    const privacySettings = await secureStorage.getPrivacySettings();
+
+    // Build prefs object for server
+    const prefs = {
+      sendReadReceipts: privacySettings.readReceipts !== false, // Default true
+      sendTypingIndicator: privacySettings.typingIndicator !== false, // Default true
+      hideOnlineStatus: !privacySettings.showOnlineStatus,
+    };
 
     this.send({
       type: 'register',
       payload: {
         whisperId: this.user.whisperId,
         publicKey: this.user.publicKey,
+        signingPublicKey: this.user.signingPublicKey,
+        pushToken: this.pushToken || undefined,
+        prefs,
       },
     });
   }
@@ -201,6 +837,10 @@ class MessagingService {
       console.log('[MessagingService] Received:', message.type);
 
       switch (message.type) {
+        case 'register_challenge':
+          await this.handleRegisterChallenge(message.payload);
+          break;
+
         case 'register_ack':
           console.log('[MessagingService] Registered successfully');
           break;
@@ -225,13 +865,135 @@ class MessagingService {
           // Heartbeat response, no action needed
           break;
 
+        case 'report_ack':
+          console.log('[MessagingService] Report acknowledged:', message.payload.reportId);
+          break;
+
         case 'error':
           console.error('[MessagingService] Server error:', message.payload);
+          break;
+
+        case 'reaction_received':
+          await this.handleReactionReceived(message.payload);
+          break;
+
+        case 'typing_status':
+          this.handleTypingStatus(message.payload);
+          break;
+
+        // Call signaling messages - forward to CallService
+        case 'incoming_call':
+        case 'call_answered':
+        case 'call_ice_candidate':
+        case 'call_ended':
+          this.handleCallSignaling(message.type, message.payload);
+          break;
+
+        // Group messages
+        case 'group_created':
+          await this.handleGroupCreated(message.payload);
+          break;
+
+        case 'group_message_received':
+          await this.handleGroupMessageReceived(message.payload);
+          break;
+
+        case 'group_updated':
+          await this.handleGroupUpdated(message.payload);
+          break;
+
+        case 'member_left_group':
+          await this.handleMemberLeftGroup(message.payload);
           break;
       }
     } catch (error) {
       console.error('[MessagingService] Failed to parse message:', error);
     }
+  }
+
+  // Private: Handle authentication challenge from server
+  private async handleRegisterChallenge(payload: { challenge: string }): Promise<void> {
+    if (!this.user) {
+      console.error('[MessagingService] Cannot respond to challenge - no user');
+      return;
+    }
+
+    const { challenge } = payload;
+    console.log('[MessagingService] Received authentication challenge');
+
+    try {
+      // Decode the challenge from base64
+      const challengeBytes = this.decodeBase64(challenge);
+
+      // Sign the challenge with our Ed25519 signing key
+      const signature = cryptoService.sign(challengeBytes, this.user.signingPrivateKey);
+
+      // Send the proof back to server
+      this.send({
+        type: 'register_proof',
+        payload: { signature },
+      });
+
+      console.log('[MessagingService] Sent authentication proof');
+    } catch (error) {
+      console.error('[MessagingService] Failed to sign challenge:', error);
+    }
+  }
+
+  // Private: Decode base64 string to Uint8Array
+  private decodeBase64(str: string): Uint8Array {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const len = str.length;
+    let bufferLength = (len * 3) / 4;
+    if (str[len - 1] === '=') bufferLength--;
+    if (str[len - 2] === '=') bufferLength--;
+    const bytes = new Uint8Array(bufferLength);
+    let p = 0;
+    for (let i = 0; i < len; i += 4) {
+      const a = chars.indexOf(str[i]);
+      const b = chars.indexOf(str[i + 1]);
+      const c = chars.indexOf(str[i + 2]);
+      const d = chars.indexOf(str[i + 3]);
+      bytes[p++] = (a << 2) | (b >> 4);
+      if (c !== -1 && str[i + 2] !== '=') bytes[p++] = ((b & 15) << 4) | (c >> 2);
+      if (d !== -1 && str[i + 3] !== '=') bytes[p++] = ((c & 3) << 6) | d;
+    }
+    return bytes;
+  }
+
+  // Private: Forward call signaling to CallService
+  private handleCallSignaling(type: string, payload: any): void {
+    // Dynamically import to avoid circular dependencies
+    import('./CallService').then(({ callService }) => {
+      callService.handleWebSocketMessage(type, payload);
+    });
+  }
+
+  // Private: Handle typing status from server
+  private handleTypingStatus(payload: {
+    fromWhisperId: string;
+    isTyping: boolean;
+  }): void {
+    const { fromWhisperId, isTyping } = payload;
+    this.notifyTypingHandlers(fromWhisperId, isTyping);
+  }
+
+  // Private: Handle incoming reaction
+  private async handleReactionReceived(payload: {
+    messageId: string;
+    fromWhisperId: string;
+    emoji: string | null;
+  }): Promise<void> {
+    const { messageId, fromWhisperId, emoji } = payload;
+
+    // Update local message with the reaction
+    // The conversationId is the fromWhisperId since reactions come from the other user
+    await secureStorage.updateMessageReaction(fromWhisperId, messageId, fromWhisperId, emoji);
+
+    // Notify handlers
+    this.notifyReactionHandlers(messageId, fromWhisperId, emoji);
+
+    console.log('[MessagingService] Reaction received from', fromWhisperId, 'for message', messageId);
   }
 
   // Private: Handle incoming encrypted message
@@ -241,28 +1003,104 @@ class MessagingService {
     encryptedContent: string;
     nonce: string;
     timestamp: number;
+    encryptedVoice?: string;
+    voiceDuration?: number;
+    encryptedFile?: string;
+    fileMetadata?: { name: string; size: number; mimeType: string };
+    senderPublicKey?: string; // For message requests from unknown senders
   }): Promise<void> {
     if (!this.user) return;
 
-    const { messageId, fromWhisperId, encryptedContent, nonce, timestamp } = payload;
+    const { messageId, fromWhisperId, encryptedContent, nonce, timestamp, encryptedVoice, voiceDuration, encryptedFile, fileMetadata, senderPublicKey } = payload;
 
     // Get the sender's contact info
-    const contact = await secureStorage.getContact(fromWhisperId);
+    let contact = await secureStorage.getContact(fromWhisperId);
+
+    // If contact doesn't exist but we have their public key, create a message request
+    if (!contact && senderPublicKey) {
+      console.log('[MessagingService] Message request from:', fromWhisperId);
+      // Create a pending contact (message request)
+      contact = {
+        whisperId: fromWhisperId,
+        publicKey: senderPublicKey,
+        addedAt: timestamp,
+        isMessageRequest: true, // Flag to indicate this is a message request
+      };
+      await secureStorage.saveContact(contact);
+    }
+
     if (!contact) {
-      console.warn('[MessagingService] Message from unknown contact:', fromWhisperId);
+      console.warn('[MessagingService] Message from unknown contact without public key:', fromWhisperId);
       return;
     }
 
-    // Decrypt the message
-    const content = cryptoService.decryptMessage(
-      encryptedContent,
-      nonce,
-      this.user.privateKey,
-      contact.publicKey
-    );
+    // Ignore messages from blocked users
+    if (contact.isBlocked) {
+      console.log('[MessagingService] Ignoring message from blocked user:', fromWhisperId);
+      return;
+    }
 
-    if (!content) {
-      console.error('[MessagingService] Failed to decrypt message');
+    // Handle voice message
+    let voice: VoiceMessage | undefined;
+    if (encryptedVoice && voiceDuration) {
+      const decryptedVoiceBase64 = cryptoService.decryptBinaryData(
+        encryptedVoice,
+        nonce,
+        this.user.privateKey,
+        contact.publicKey
+      );
+
+      if (decryptedVoiceBase64) {
+        // Save voice data to a local file
+        const voiceUri = await this.saveVoiceToFile(decryptedVoiceBase64, messageId);
+        if (voiceUri) {
+          voice = {
+            uri: voiceUri,
+            duration: voiceDuration,
+          };
+        }
+      }
+    }
+
+    // Handle file attachment
+    let file: FileAttachment | undefined;
+    if (encryptedFile && fileMetadata) {
+      const decryptedFileBase64 = cryptoService.decryptBinaryData(
+        encryptedFile,
+        nonce,
+        this.user.privateKey,
+        contact.publicKey
+      );
+
+      if (decryptedFileBase64) {
+        // Save file data to a local file
+        const fileUri = await this.saveFileToLocal(decryptedFileBase64, messageId, fileMetadata.name);
+        if (fileUri) {
+          file = {
+            name: fileMetadata.name,
+            size: fileMetadata.size,
+            mimeType: fileMetadata.mimeType,
+            uri: fileUri,
+          };
+        }
+      }
+    }
+
+    // Decrypt text content (may be empty for voice/file messages)
+    let content = '';
+    if (encryptedContent) {
+      const decryptedContent = cryptoService.decryptMessage(
+        encryptedContent,
+        nonce,
+        this.user.privateKey,
+        contact.publicKey
+      );
+      content = decryptedContent || '';
+    }
+
+    // For voice/file-only messages, we may have no text content
+    if (!content && !voice && !file) {
+      console.error('[MessagingService] Failed to decrypt message - no content, voice, or file');
       return;
     }
 
@@ -274,6 +1112,8 @@ class MessagingService {
       content,
       timestamp,
       status: 'delivered',
+      voice,
+      file,
     };
 
     // Save to storage
@@ -281,8 +1121,15 @@ class MessagingService {
 
     // Update conversation
     const conversation = await secureStorage.getOrCreateConversation(fromWhisperId);
+    // Determine display content for the last message preview
+    let displayContent = content;
+    if (voice) {
+      displayContent = 'Voice message';
+    } else if (file) {
+      displayContent = `File: ${file.name}`;
+    }
     await secureStorage.updateConversation(fromWhisperId, {
-      lastMessage: message,
+      lastMessage: { ...message, content: displayContent },
       updatedAt: timestamp,
       unreadCount: conversation.unreadCount + 1,
     });
@@ -290,10 +1137,63 @@ class MessagingService {
     // Send delivery receipt
     this.sendDeliveryReceipt(fromWhisperId, messageId, 'delivered');
 
-    // Notify handler
-    this.onMessageReceived?.(message, contact);
+    // Notify all handlers
+    this.notifyMessageHandlers(message, contact);
 
     console.log('[MessagingService] Message received from', fromWhisperId);
+  }
+
+  // Private: Save voice data to local file
+  private async saveVoiceToFile(base64Data: string, messageId: string): Promise<string | null> {
+    try {
+      // Dynamic import to avoid loading file system when not needed
+      const FileSystem = await import('expo-file-system');
+      const voiceDir = `${FileSystem.documentDirectory}voices/`;
+
+      // Ensure directory exists
+      const dirInfo = await FileSystem.getInfoAsync(voiceDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(voiceDir, { intermediates: true });
+      }
+
+      const filePath = `${voiceDir}${messageId}.m4a`;
+      await FileSystem.writeAsStringAsync(filePath, base64Data, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      return filePath;
+    } catch (error) {
+      console.error('[MessagingService] Failed to save voice file:', error);
+      return null;
+    }
+  }
+
+  // Private: Save file data to local file
+  private async saveFileToLocal(base64Data: string, messageId: string, fileName: string): Promise<string | null> {
+    try {
+      // Dynamic import to avoid loading file system when not needed
+      const FileSystem = await import('expo-file-system');
+      const filesDir = `${FileSystem.documentDirectory}files/`;
+
+      // Ensure directory exists
+      const dirInfo = await FileSystem.getInfoAsync(filesDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(filesDir, { intermediates: true });
+      }
+
+      // Get file extension from original filename
+      const ext = fileName.includes('.') ? fileName.substring(fileName.lastIndexOf('.')) : '';
+      const filePath = `${filesDir}${messageId}${ext}`;
+
+      await FileSystem.writeAsStringAsync(filePath, base64Data, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      return filePath;
+    } catch (error) {
+      console.error('[MessagingService] Failed to save file:', error);
+      return null;
+    }
   }
 
   // Private: Handle delivery status update
@@ -306,7 +1206,7 @@ class MessagingService {
     // Map 'pending' to 'sent' for UI purposes
     const uiStatus = status === 'pending' ? 'sent' : status;
 
-    this.onStatusUpdate?.(messageId, uiStatus as Message['status']);
+    this.notifyStatusHandlers(messageId, uiStatus as Message['status']);
     console.log('[MessagingService] Message', messageId, 'status:', status);
   }
 
@@ -317,6 +1217,7 @@ class MessagingService {
     encryptedContent: string;
     nonce: string;
     timestamp: number;
+    senderPublicKey?: string; // For message requests from unknown senders
   }>): Promise<void> {
     console.log('[MessagingService] Processing', messages.length, 'pending messages');
 
@@ -359,6 +1260,181 @@ class MessagingService {
       clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
+  }
+
+  // ============ GROUP MESSAGE HANDLERS ============
+
+  // Private: Handle group created notification
+  private async handleGroupCreated(payload: {
+    groupId: string;
+    name: string;
+    createdBy: string;
+    members: string[];
+    createdAt: number;
+  }): Promise<void> {
+    const { groupId, name, createdBy, members, createdAt } = payload;
+
+    // Check if we already have this group
+    const existingGroup = await secureStorage.getGroup(groupId);
+    if (existingGroup) {
+      console.log('[MessagingService] Group already exists:', groupId);
+      return;
+    }
+
+    // Create and save the group
+    const group: Group = {
+      id: groupId,
+      name,
+      members,
+      createdBy,
+      createdAt,
+    };
+
+    await secureStorage.saveGroup(group);
+    await secureStorage.getOrCreateGroupConversation(groupId);
+
+    // Notify handlers
+    this.notifyGroupUpdateHandlers(groupId, group);
+
+    console.log('[MessagingService] Group created by another member:', groupId);
+  }
+
+  // Private: Handle incoming group message
+  private async handleGroupMessageReceived(payload: {
+    groupId: string;
+    messageId: string;
+    fromWhisperId: string;
+    encryptedContent: string;
+    nonce: string;
+    timestamp: number;
+    senderName?: string;
+  }): Promise<void> {
+    if (!this.user) return;
+
+    const { groupId, messageId, fromWhisperId, encryptedContent, nonce, timestamp, senderName } = payload;
+
+    // Check if we're a member of this group
+    const group = await secureStorage.getGroup(groupId);
+    if (!group) {
+      console.log('[MessagingService] Ignoring message for unknown group:', groupId);
+      return;
+    }
+
+    // Don't process our own messages
+    if (fromWhisperId === this.user.whisperId) {
+      return;
+    }
+
+    // Decrypt the message content
+    // For MVP, we use simple decryption since we're not using proper group encryption
+    const content = cryptoService.decryptFromGroup(
+      encryptedContent,
+      nonce,
+      this.user.privateKey
+    ) || encryptedContent; // Fallback to showing encrypted content if decryption fails
+
+    // Create message object
+    const message: Message = {
+      id: messageId,
+      conversationId: groupId,
+      senderId: fromWhisperId,
+      content,
+      timestamp,
+      status: 'delivered',
+      groupId,
+      senderName,
+    };
+
+    // Save to storage
+    await secureStorage.addGroupMessage(groupId, message);
+
+    // Update group conversation
+    const conversation = await secureStorage.getOrCreateGroupConversation(groupId);
+    await secureStorage.updateGroupConversation(groupId, {
+      lastMessage: message,
+      updatedAt: timestamp,
+      unreadCount: conversation.unreadCount + 1,
+    });
+
+    // Notify handlers
+    this.notifyGroupMessageHandlers(message, group);
+
+    console.log('[MessagingService] Group message received in', groupId, 'from', fromWhisperId);
+  }
+
+  // Private: Handle group updated notification
+  private async handleGroupUpdated(payload: {
+    groupId: string;
+    updatedBy: string;
+    name?: string;
+    addedMembers?: string[];
+    removedMembers?: string[];
+  }): Promise<void> {
+    if (!this.user) return;
+
+    const { groupId, updatedBy, name, addedMembers, removedMembers } = payload;
+
+    // Get the group
+    const group = await secureStorage.getGroup(groupId);
+    if (!group) {
+      console.log('[MessagingService] Ignoring update for unknown group:', groupId);
+      return;
+    }
+
+    // Check if we were removed
+    if (removedMembers?.includes(this.user.whisperId)) {
+      // We were removed from the group
+      await secureStorage.deleteGroup(groupId);
+      this.notifyGroupUpdateHandlers(groupId, { members: [] });
+      console.log('[MessagingService] Removed from group:', groupId);
+      return;
+    }
+
+    // Apply updates
+    const updates: Partial<Group> = {};
+
+    if (name) {
+      updates.name = name;
+    }
+
+    if (addedMembers && addedMembers.length > 0) {
+      updates.members = [...new Set([...group.members, ...addedMembers])];
+    }
+
+    if (removedMembers && removedMembers.length > 0) {
+      updates.members = (updates.members || group.members).filter(
+        m => !removedMembers.includes(m)
+      );
+    }
+
+    if (Object.keys(updates).length > 0) {
+      await secureStorage.updateGroup(groupId, updates);
+      this.notifyGroupUpdateHandlers(groupId, updates);
+    }
+
+    console.log('[MessagingService] Group updated:', groupId, 'by', updatedBy);
+  }
+
+  // Private: Handle member left group notification
+  private async handleMemberLeftGroup(payload: {
+    groupId: string;
+    memberId: string;
+  }): Promise<void> {
+    const { groupId, memberId } = payload;
+
+    const group = await secureStorage.getGroup(groupId);
+    if (!group) {
+      console.log('[MessagingService] Ignoring leave for unknown group:', groupId);
+      return;
+    }
+
+    // Remove the member from the group
+    const newMembers = group.members.filter(m => m !== memberId);
+    await secureStorage.updateGroup(groupId, { members: newMembers });
+
+    this.notifyGroupUpdateHandlers(groupId, { members: newMembers });
+
+    console.log('[MessagingService] Member', memberId, 'left group:', groupId);
   }
 }
 

@@ -1,10 +1,24 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import dotenv from 'dotenv';
 import { WebSocketServer } from './websocket/WebSocketServer';
+import { reportService } from './services/ReportService';
+import { adminService } from './services/AdminService';
 
 // Load environment variables
 dotenv.config();
+
+// Admin authentication middleware
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'whisper-admin-key-change-in-production';
+
+const adminAuth = (req: Request, res: Response, next: NextFunction): void => {
+  const apiKey = req.headers['x-admin-api-key'];
+  if (apiKey !== ADMIN_API_KEY) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+};
 
 const PORT = parseInt(process.env.PORT || '3031', 10);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -35,10 +49,116 @@ app.get('/stats', (_req, res) => {
 // CORS headers for API
 app.use((_req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, X-Admin-API-Key');
   next();
 });
+
+// ============ ADMIN API ENDPOINTS ============
+
+// Get all pending reports
+app.get('/admin/reports', adminAuth, (_req, res) => {
+  const pending = reportService.getPendingReports();
+  const stats = reportService.getStats();
+  res.json({ pending, stats });
+});
+
+// Get reports for a specific user
+app.get('/admin/reports/user/:whisperId', adminAuth, (req, res) => {
+  const { whisperId } = req.params;
+  const reports = reportService.getReportsForUser(whisperId);
+  res.json({ reports });
+});
+
+// Review a report
+app.post('/admin/reports/:reportId/review', adminAuth, (req, res) => {
+  const { reportId } = req.params;
+  const { status, notes } = req.body;
+
+  if (!['reviewed', 'action_taken', 'dismissed'].includes(status)) {
+    res.status(400).json({ error: 'Invalid status' });
+    return;
+  }
+
+  const success = reportService.reviewReport(reportId, status, notes);
+  if (!success) {
+    res.status(404).json({ error: 'Report not found' });
+    return;
+  }
+
+  res.json({ success: true, reportId, status });
+});
+
+// Ban a user
+app.post('/admin/ban', adminAuth, (req, res) => {
+  const { whisperId, reason, relatedReportIds, notes } = req.body;
+
+  if (!whisperId || !reason) {
+    res.status(400).json({ error: 'whisperId and reason are required' });
+    return;
+  }
+
+  const adminId = 'admin'; // In production, identify the admin from auth
+  const ban = adminService.banUser(whisperId, reason, adminId, relatedReportIds || [], notes);
+  res.json({ success: true, ban });
+});
+
+// Unban a user
+app.post('/admin/unban', adminAuth, (req, res) => {
+  const { whisperId } = req.body;
+
+  if (!whisperId) {
+    res.status(400).json({ error: 'whisperId is required' });
+    return;
+  }
+
+  const adminId = 'admin';
+  const success = adminService.unbanUser(whisperId, adminId);
+  if (!success) {
+    res.status(404).json({ error: 'User not banned' });
+    return;
+  }
+
+  res.json({ success: true, whisperId });
+});
+
+// Get all banned users
+app.get('/admin/bans', adminAuth, (_req, res) => {
+  const banned = adminService.getAllBannedUsers();
+  const stats = adminService.getStats();
+  res.json({ banned, stats });
+});
+
+// Check if a user is banned
+app.get('/admin/bans/:whisperId', adminAuth, (req, res) => {
+  const { whisperId } = req.params;
+  const isBanned = adminService.isBanned(whisperId);
+  const details = adminService.getBanDetails(whisperId);
+  res.json({ whisperId, isBanned, details });
+});
+
+// Export data for law enforcement
+app.post('/admin/export/law-enforcement', adminAuth, (req, res) => {
+  const { reportIds, whisperIds } = req.body;
+
+  const reportData = reportIds ? reportService.exportForLawEnforcement(reportIds) : [];
+  const banData = whisperIds ? adminService.exportForLawEnforcement(whisperIds) : [];
+
+  res.json({
+    exportedAt: new Date().toISOString(),
+    reports: reportData,
+    bans: banData,
+    note: 'Message content is E2E encrypted and not accessible by server',
+  });
+});
+
+// Get super admin info
+app.get('/admin/super-admin', adminAuth, (_req, res) => {
+  const superAdmin = adminService.getSuperAdmin();
+  res.json({ superAdmin });
+});
+
+// ============ END ADMIN API ============
 
 // Create HTTP server
 const server = createServer(app);
@@ -56,9 +176,14 @@ server.listen(PORT, HOST, () => {
   console.log(`║  HTTP Server:      http://${HOST}:${PORT}                     ║`);
   console.log(`║  WebSocket Server: ws://${HOST}:${PORT}                       ║`);
   console.log('║                                                            ║');
-  console.log('║  Endpoints:                                                ║');
+  console.log('║  Public Endpoints:                                         ║');
   console.log('║    GET /health - Health check                              ║');
   console.log('║    GET /stats  - Server statistics                         ║');
+  console.log('║                                                            ║');
+  console.log('║  Admin Endpoints (requires X-Admin-API-Key header):        ║');
+  console.log('║    GET  /admin/reports      - Get pending reports          ║');
+  console.log('║    POST /admin/ban          - Ban a user                   ║');
+  console.log('║    GET  /admin/bans         - Get banned users             ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');
 
