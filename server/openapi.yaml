@@ -1,0 +1,2138 @@
+openapi: 3.1.0
+info:
+  title: Whisper API
+  description: |
+    # Whisper - Private. Secure. Anonymous.
+
+    End-to-end encrypted messaging platform with zero-knowledge architecture.
+
+    ## Features
+
+    ### Phase 1: App Store Requirements & Critical Features
+    - Push Notifications
+    - Block/Report users
+    - Delete account (GDPR)
+    - Child Safety Compliance
+
+    ### Phase 2: Core Messaging Features
+    - Contact nicknames
+    - Reply to messages
+    - Message search
+    - Read receipts toggle
+    - Typing indicator toggle
+    - Dark/Light theme
+
+    ### Phase 3: Media & Rich Content
+    - Send images
+    - Voice messages
+    - Send files
+    - Emoji reactions
+
+    ### Phase 4: Advanced Features
+    - Voice calls (WebRTC)
+    - Video calls (WebRTC)
+    - Group chat
+    - Disappearing messages
+    - App lock (PIN/Biometrics)
+    - Online status privacy
+    - Message forwarding
+
+    ## Encryption
+
+    All message content is end-to-end encrypted using:
+    - **Key Exchange**: X25519 (Curve25519 Diffie-Hellman)
+    - **Encryption**: XSalsa20-Poly1305 (TweetNaCl)
+    - **Library**: tweetnacl-js
+
+    The server never has access to unencrypted message content.
+
+    ## Identity & Key Architecture
+
+    Each client maintains **two separate keypairs** for distinct purposes:
+
+    | Keypair | Algorithm | Purpose |
+    |---------|-----------|---------|
+    | **Encryption Key** | X25519 | Message encryption (key agreement) |
+    | **Signing Key** | Ed25519 | Authentication (challenge-response) |
+
+    This separation is intentional: X25519 and Ed25519 are different curve operations.
+    While mathematically related (both use Curve25519), they are NOT interchangeable.
+    Using separate keys ensures cryptographic clarity and library compatibility.
+
+    ## Authentication (Challenge-Response)
+
+    To prevent impersonation attacks, WebSocket registration uses Ed25519 challenge-response:
+
+    ```
+    ┌─────────────────────────────────────────────────────────────────┐
+    │                    REGISTRATION FLOW                             │
+    ├─────────────────────────────────────────────────────────────────┤
+    │                                                                  │
+    │  1. Client → Server: { type: "register", payload: {             │
+    │       whisperId: "WSP-...",                                     │
+    │       publicKey: "base64...",        // X25519 for encryption   │
+    │       signingPublicKey: "base64..."  // Ed25519 for auth        │
+    │     }}                                                          │
+    │                                                                  │
+    │  2. Server → Client: { type: "register_challenge", payload: {   │
+    │       challenge: "random_32_bytes_base64",                      │
+    │       expiresAt: 1705132830000  // 30 seconds                   │
+    │     }}                                                          │
+    │                                                                  │
+    │  3. Client → Server: { type: "register_proof", payload: {       │
+    │       signature: Ed25519.sign(challenge, signingPrivateKey)     │
+    │     }}                                                          │
+    │                                                                  │
+    │  4. Server verifies: Ed25519.verify(sig, challenge, signingPK)  │
+    │     → If valid: { type: "register_ack", payload: { success } }  │
+    │     → If invalid: { type: "error", code: "AUTH_FAILED" }        │
+    │                                                                  │
+    └─────────────────────────────────────────────────────────────────┘
+    ```
+
+    This proves the client possesses the Ed25519 private key matching the claimed signing public key.
+
+    ## Metadata & Privacy
+
+    ### What Server Sees (Unavoidable)
+    | Data | Purpose | Retention |
+    |------|---------|-----------|
+    | Whisper IDs (sender/recipient) | Message routing | Session only |
+    | Timestamps | Ordering, expiration | 7 days max |
+    | Public keys | Key discovery | Until account deletion |
+    | Group IDs + member list | Group routing | Until group deletion |
+    | IP addresses | Connection | Not logged (MVP) |
+
+    ### What Server NEVER Sees
+    - Message content (E2E encrypted)
+    - Private keys
+    - Contact nicknames (local only)
+    - Message search index (local only)
+    - Read status preferences (enforced client-side)
+
+    ### Metadata Minimization Principles
+    - No persistent connection logs
+    - No message content logging (even encrypted)
+    - Pending messages auto-expire (7 days)
+    - Account deletion = full data wipe
+
+    ## Key Lifecycle
+
+    ### Key Generation
+    - **Initial Setup**: Client generates **two keypairs** on account creation:
+      - X25519 keypair for encryption (nacl.box.keyPair())
+      - Ed25519 keypair for signing (nacl.sign.keyPair())
+    - **Entropy Source**: `crypto.getRandomValues()` (Web Crypto API) or platform secure random
+    - **Key Storage**: Both private keys stored in device secure storage (Keychain/Keystore via expo-secure-store)
+    - **Public Keys**: Server stores both public keys (encryption + signing) for routing and authentication
+
+    ### Key Exchange (Per-Contact)
+    ```
+    1. User A registers with publicKeyA
+    2. User B registers with publicKeyB
+    3. When A sends to B:
+       - A computes sharedSecret = X25519(privateKeyA, publicKeyB)
+       - A encrypts message with XSalsa20-Poly1305(sharedSecret, nonce, plaintext)
+       - Server forwards encryptedContent + nonce to B
+    4. B decrypts:
+       - B computes sharedSecret = X25519(privateKeyB, publicKeyA)
+       - B decrypts with XSalsa20-Poly1305(sharedSecret, nonce, ciphertext)
+    ```
+
+    ### Key Rotation
+    - **Not Implemented (MVP)**: Keys persist for account lifetime
+    - **Future Enhancement**: Periodic key rotation with re-key protocol
+
+    ### Account Deletion (GDPR)
+    When user deletes account:
+    - **Server-side**: Whisper ID, public key, pending messages, metadata → permanently deleted
+    - **Client-side**: Private key, local messages, contacts → app wipes secure storage
+    - **Recipients**: Already-delivered messages remain on their devices (E2E design)
+    - **No Recovery**: Deletion is immediate and irreversible; new account = new Whisper ID
+
+    ### Nonce Management
+    - **Generation**: Random 24-byte nonce per message (`nacl.randomBytes(24)`)
+    - **Uniqueness**: Probabilistically unique (2^192 space)
+    - **Transmission**: Sent alongside ciphertext (not secret)
+
+    ## Message Idempotency
+
+    ### Pending Message Handling
+    Messages for offline users are queued with the following guarantees:
+
+    | Property | Implementation |
+    |----------|----------------|
+    | **Message ID** | UUID v4 generated client-side |
+    | **Deduplication** | Server checks `messageId` before queueing |
+    | **Expiration** | Pending messages expire after 7 days (configurable) |
+    | **Delivery** | FIFO per conversation (1:1); best-effort for groups (client sorts by timestamp + messageId) |
+    | **Checkpoint** | `fetch_pending` accepts optional `cursor` for resumable delivery |
+    | **Acknowledgment** | Client sends `delivery_receipt` after processing |
+
+    ### Duplicate Prevention
+    ```
+    Client sends: { messageId: "abc-123", ... }
+
+    Server logic:
+    1. Check if messageId exists in pending queue → skip if duplicate
+    2. Check if recipient online → deliver immediately
+    3. Otherwise → queue for later delivery
+    4. Return status: "delivered" | "pending"
+
+    On reconnect:
+    1. Server sends all pending messages
+    2. Client processes each, sends delivery_receipt
+    3. Server removes from queue after receipt
+    ```
+
+    ### Retry Semantics
+    - **Client Retry**: Safe to retry with same `messageId` (idempotent)
+    - **Server Guarantee**: At-least-once delivery
+    - **Client Responsibility**: Deduplicate by `messageId` in local storage
+
+    ## Group Encryption Model
+
+    ### Architecture (Simplified for MVP)
+    Groups use a shared symmetric key model:
+
+    ```
+    ┌─────────────────────────────────────────────────────────┐
+    │                    GROUP ENCRYPTION                      │
+    ├─────────────────────────────────────────────────────────┤
+    │                                                          │
+    │   Creator generates: groupKey = nacl.randomBytes(32)    │
+    │                                                          │
+    │   For each member:                                       │
+    │     encryptedGroupKey = encrypt(groupKey, sharedSecret) │
+    │     send via 1:1 encrypted message                       │
+    │                                                          │
+    │   Group messages:                                        │
+    │     ciphertext = XSalsa20-Poly1305(groupKey, nonce, msg)│
+    │     broadcast to all members                             │
+    │                                                          │
+    └─────────────────────────────────────────────────────────┘
+    ```
+
+    ### Key Distribution
+    1. **Group Creation**: Creator generates random 32-byte symmetric key
+    2. **Key Sharing**: Key sent to each member via existing E2E channel (1:1 message)
+    3. **Storage**: Group key stored locally with group metadata
+
+    ### Member Management
+    | Action | Key Handling |
+    |--------|--------------|
+    | **Add Member** | Only group creator/admin distributes group key via E2E message |
+    | **Remove Member** | Key rotation required (creator distributes new key to remaining members) |
+    | **Leave Group** | Local key deletion, no server action needed |
+
+    ### Security Properties
+    - **Forward Secrecy**: Not guaranteed (removed members may have old messages)
+    - **Post-Compromise**: Key rotation on member removal mitigates future exposure
+    - **Server Knowledge**: Server sees group ID and member list, not content or key
+
+    ### Limitations (MVP)
+    - No key rotation on member removal (planned for v2)
+    - Group key derived client-side, not using Signal Protocol's Sender Keys
+    - Maximum group size: 50 members (practical limit)
+
+    ### Reserved Message Types (v2)
+    The following message types are reserved for future key rotation:
+    - `rotate_group_key` (client → server): Initiate group key rotation
+    - `group_key_rotated` (server → client): Notify members of new group key
+
+    ## Architecture
+
+    - **REST API**: Health checks, statistics, admin operations
+    - **WebSocket**: Real-time messaging, call signaling, group communication
+
+  version: 1.0.0
+  contact:
+    name: Whisper Support
+    email: support@sarjmobile.com
+  license:
+    name: Proprietary
+    url: https://whisper.sarjmobile.com/terms
+
+servers:
+  - url: https://api.whisper.sarjmobile.com
+    description: Production REST API
+  - url: wss://api.whisper.sarjmobile.com
+    description: Production WebSocket (TLS required)
+  - url: http://localhost:3031
+    description: Development REST API
+  - url: ws://localhost:3031
+    description: Development WebSocket
+
+tags:
+  - name: Health
+    description: Server health and status endpoints
+  - name: Admin
+    description: Admin API endpoints (requires API key)
+  - name: Reports
+    description: User report management
+  - name: Bans
+    description: User ban management
+  - name: WebSocket
+    description: Real-time WebSocket communication
+  - name: Messaging
+    description: Core messaging operations
+  - name: Calls
+    description: Voice and video call signaling
+  - name: Groups
+    description: Group chat operations
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns server health status and uptime
+      operationId: getHealth
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                timestamp: "2026-01-13T12:00:00.000Z"
+                uptime: 86400
+
+  /stats:
+    get:
+      tags:
+        - Health
+      summary: Server statistics
+      description: Returns current server statistics including active connections and pending messages
+      operationId: getStats
+      responses:
+        '200':
+          description: Server statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatsResponse'
+              example:
+                connections: 42
+                pendingMessages:
+                  users: 5
+                  messages: 23
+                timestamp: "2026-01-13T12:00:00.000Z"
+                uptime: 86400
+
+  /admin/reports:
+    get:
+      tags:
+        - Admin
+        - Reports
+      summary: Get all pending reports
+      description: Returns all pending user reports and statistics
+      operationId: getReports
+      security:
+        - AdminApiKey: []
+      responses:
+        '200':
+          description: List of pending reports
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReportsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/reports/user/{whisperId}:
+    get:
+      tags:
+        - Admin
+        - Reports
+      summary: Get reports for a specific user
+      description: Returns all reports filed against a specific user
+      operationId: getReportsForUser
+      security:
+        - AdminApiKey: []
+      parameters:
+        - name: whisperId
+          in: path
+          required: true
+          description: The Whisper ID of the reported user
+          schema:
+            $ref: '#/components/schemas/WhisperId'
+      responses:
+        '200':
+          description: User reports
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reports:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Report'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/reports/{reportId}/review:
+    post:
+      tags:
+        - Admin
+        - Reports
+      summary: Review a report
+      description: Update the status of a report after review
+      operationId: reviewReport
+      security:
+        - AdminApiKey: []
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          description: The report ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewReportRequest'
+      responses:
+        '200':
+          description: Report reviewed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  reportId:
+                    type: string
+                  status:
+                    $ref: '#/components/schemas/ReportStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/ban:
+    post:
+      tags:
+        - Admin
+        - Bans
+      summary: Ban a user
+      description: Ban a user account (for child safety or policy violations)
+      operationId: banUser
+      security:
+        - AdminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BanUserRequest'
+      responses:
+        '200':
+          description: User banned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  ban:
+                    $ref: '#/components/schemas/BannedUser'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/unban:
+    post:
+      tags:
+        - Admin
+        - Bans
+      summary: Unban a user
+      description: Remove ban from a user account
+      operationId: unbanUser
+      security:
+        - AdminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - whisperId
+              properties:
+                whisperId:
+                  $ref: '#/components/schemas/WhisperId'
+      responses:
+        '200':
+          description: User unbanned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  whisperId:
+                    $ref: '#/components/schemas/WhisperId'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /admin/bans:
+    get:
+      tags:
+        - Admin
+        - Bans
+      summary: Get all banned users
+      description: Returns list of all banned users and ban statistics
+      operationId: getBannedUsers
+      security:
+        - AdminApiKey: []
+      responses:
+        '200':
+          description: List of banned users
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BansResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/bans/{whisperId}:
+    get:
+      tags:
+        - Admin
+        - Bans
+      summary: Check if a user is banned
+      description: Check ban status and get ban details for a specific user
+      operationId: checkBanStatus
+      security:
+        - AdminApiKey: []
+      parameters:
+        - name: whisperId
+          in: path
+          required: true
+          description: The Whisper ID to check
+          schema:
+            $ref: '#/components/schemas/WhisperId'
+      responses:
+        '200':
+          description: Ban status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  whisperId:
+                    $ref: '#/components/schemas/WhisperId'
+                  isBanned:
+                    type: boolean
+                  details:
+                    $ref: '#/components/schemas/BannedUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/export/law-enforcement:
+    post:
+      tags:
+        - Admin
+      summary: Export data for law enforcement
+      description: |
+        Export report and ban data for law enforcement requests.
+        Note: Message content is E2E encrypted and not accessible by server.
+      operationId: exportForLawEnforcement
+      security:
+        - AdminApiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reportIds:
+                  type: array
+                  items:
+                    type: string
+                  description: List of report IDs to export
+                whisperIds:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/WhisperId'
+                  description: List of Whisper IDs to export ban data for
+      responses:
+        '200':
+          description: Exported data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LawEnforcementExport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /admin/super-admin:
+    get:
+      tags:
+        - Admin
+      summary: Get super admin info
+      description: Returns the super admin contact information
+      operationId: getSuperAdmin
+      security:
+        - AdminApiKey: []
+      responses:
+        '200':
+          description: Super admin info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  superAdmin:
+                    type: object
+                    properties:
+                      email:
+                        type: string
+                        format: email
+                      name:
+                        type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+# ==================== WebSocket User Actions ====================
+# The following user actions are performed via WebSocket (not REST):
+# - Block/Unblock users
+# - Delete account
+# These are documented in the WebSocket schemas below.
+
+components:
+  securitySchemes:
+    AdminApiKey:
+      type: apiKey
+      in: header
+      name: X-Admin-API-Key
+      description: Admin API key for accessing admin endpoints
+
+  schemas:
+    # ==================== Common Types ====================
+
+    WhisperId:
+      type: string
+      pattern: '^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$'
+      description: Unique Whisper ID format
+      example: WSP-A1B2-C3D4-E5F6
+
+    GroupId:
+      type: string
+      pattern: '^GRP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$'
+      description: Unique Group ID format
+      example: GRP-X1Y2-Z3A4-B5C6
+
+    PublicKey:
+      type: string
+      minLength: 10
+      description: Base64-encoded X25519 public key
+      example: "7hj8k9l0m1n2o3p4q5r6s7t8u9v0w1x2y3z4a5b6c7d="
+
+    EncryptedContent:
+      type: string
+      description: Base64-encoded encrypted message content (XSalsa20-Poly1305)
+      example: "encrypted_base64_content_here..."
+
+    Nonce:
+      type: string
+      description: Base64-encoded 24-byte nonce for XSalsa20-Poly1305
+      example: "nonce_base64_24_bytes..."
+
+    Timestamp:
+      type: integer
+      format: int64
+      description: Unix timestamp in milliseconds
+      example: 1705132800000
+
+    # ==================== REST API Schemas ====================
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: number
+          description: Server uptime in seconds
+
+    StatsResponse:
+      type: object
+      properties:
+        connections:
+          type: integer
+          description: Number of active WebSocket connections
+        pendingMessages:
+          type: object
+          properties:
+            users:
+              type: integer
+              description: Number of users with pending messages
+            messages:
+              type: integer
+              description: Total number of pending messages
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: number
+
+    ReportReason:
+      type: string
+      enum:
+        - inappropriate_content
+        - harassment
+        - spam
+        - child_safety
+        - other
+      description: Reason for the report
+
+    ReportStatus:
+      type: string
+      enum:
+        - pending
+        - reviewed
+        - action_taken
+        - dismissed
+      description: Status of the report
+
+    Report:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        reporterWhisperId:
+          $ref: '#/components/schemas/WhisperId'
+        reportedWhisperId:
+          $ref: '#/components/schemas/WhisperId'
+        reason:
+          $ref: '#/components/schemas/ReportReason'
+        description:
+          type: string
+        status:
+          $ref: '#/components/schemas/ReportStatus'
+        createdAt:
+          $ref: '#/components/schemas/Timestamp'
+        reviewedAt:
+          $ref: '#/components/schemas/Timestamp'
+        reviewNotes:
+          type: string
+
+    ReportsResponse:
+      type: object
+      properties:
+        pending:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+        stats:
+          type: object
+          properties:
+            total:
+              type: integer
+            pending:
+              type: integer
+            reviewed:
+              type: integer
+            actionTaken:
+              type: integer
+            dismissed:
+              type: integer
+
+    ReviewReportRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum:
+            - reviewed
+            - action_taken
+            - dismissed
+        notes:
+          type: string
+
+    BanReason:
+      type: string
+      enum:
+        - child_safety
+        - harassment
+        - spam
+        - terms_violation
+        - other
+      description: Reason for the ban
+
+    BannedUser:
+      type: object
+      properties:
+        whisperId:
+          $ref: '#/components/schemas/WhisperId'
+        reason:
+          $ref: '#/components/schemas/BanReason'
+        bannedAt:
+          $ref: '#/components/schemas/Timestamp'
+        bannedBy:
+          type: string
+        relatedReportIds:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+
+    BanUserRequest:
+      type: object
+      required:
+        - whisperId
+        - reason
+      properties:
+        whisperId:
+          $ref: '#/components/schemas/WhisperId'
+        reason:
+          $ref: '#/components/schemas/BanReason'
+        relatedReportIds:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+
+    BansResponse:
+      type: object
+      properties:
+        banned:
+          type: array
+          items:
+            $ref: '#/components/schemas/BannedUser'
+        stats:
+          type: object
+          properties:
+            total:
+              type: integer
+            byReason:
+              type: object
+              additionalProperties:
+                type: integer
+
+    LawEnforcementExport:
+      type: object
+      description: |
+        Auditable export for law enforcement requests.
+
+        **Retention Policy:**
+        - Export logs retained for 90 days (configurable)
+        - All access logged with requestedBy, timestamp, and criteria
+        - Exports do not include message content (E2E encrypted, not accessible)
+      properties:
+        exportId:
+          type: string
+          format: uuid
+          description: Unique identifier for this export (for audit trail)
+        exportedAt:
+          type: string
+          format: date-time
+        requestedBy:
+          type: string
+          description: Admin identifier who requested this export
+        criteria:
+          type: object
+          description: Original request parameters for audit
+          properties:
+            reportIds:
+              type: array
+              items:
+                type: string
+            whisperIds:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+        reports:
+          type: array
+          items:
+            $ref: '#/components/schemas/Report'
+        bans:
+          type: array
+          items:
+            $ref: '#/components/schemas/BannedUser'
+        note:
+          type: string
+          example: "Message content is E2E encrypted and not accessible by server"
+
+    # ==================== WebSocket Message Schemas ====================
+
+    # Client -> Server Messages
+
+    RegisterMessage:
+      type: object
+      description: |
+        Step 1 of registration. Server responds with register_challenge.
+        Client must then send register_proof to complete authentication.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [register]
+        payload:
+          type: object
+          required:
+            - whisperId
+            - publicKey
+            - signingPublicKey
+          properties:
+            whisperId:
+              $ref: '#/components/schemas/WhisperId'
+            publicKey:
+              $ref: '#/components/schemas/PublicKey'
+              description: X25519 public key for message encryption
+            signingPublicKey:
+              type: string
+              description: Ed25519 public key for authentication (separate from encryption key)
+            pushToken:
+              type: string
+              description: Push notification token (FCM/APNs)
+            prefs:
+              type: object
+              description: |
+                Privacy preferences. Server enforces whether it forwards read/typing events;
+                actual read state remains client-local. Server does not store or interpret content.
+              properties:
+                sendReadReceipts:
+                  type: boolean
+                  default: true
+                  description: Whether to send read receipts to contacts
+                sendTypingIndicator:
+                  type: boolean
+                  default: true
+                  description: Whether to send typing indicators
+                hideOnlineStatus:
+                  type: boolean
+                  default: false
+                  description: Hide online status from other users
+
+    RegisterProofMessage:
+      type: object
+      description: |
+        Step 2 of registration. Client signs the challenge with Ed25519 private key.
+        Server verifies signature against the signingPublicKey from register message.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [register_proof]
+        payload:
+          type: object
+          required:
+            - signature
+          properties:
+            signature:
+              type: string
+              description: Base64-encoded Ed25519 signature of challenge
+
+    UpdatePushTokenMessage:
+      type: object
+      description: |
+        Update push notification token. Server maintains single active token per whisperId.
+        Old token is invalidated when new one is set. Rate limited to prevent abuse.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [update_push_token]
+        payload:
+          type: object
+          required:
+            - pushToken
+          properties:
+            pushToken:
+              type: string
+              description: New FCM/APNs push token
+
+    SendMessageMessage:
+      type: object
+      description: Send an encrypted message
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [send_message]
+        payload:
+          type: object
+          required:
+            - messageId
+            - toWhisperId
+            - encryptedContent
+            - nonce
+          properties:
+            messageId:
+              type: string
+              format: uuid
+            toWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            encryptedContent:
+              $ref: '#/components/schemas/EncryptedContent'
+            nonce:
+              $ref: '#/components/schemas/Nonce'
+
+    DeliveryReceiptMessage:
+      type: object
+      description: |
+        Send delivery/read receipt.
+        Note: Server validates messageId → recipient mapping; toWhisperId mismatch results in drop.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [delivery_receipt]
+        payload:
+          type: object
+          required:
+            - messageId
+            - status
+          properties:
+            messageId:
+              type: string
+              format: uuid
+              description: Server uses messageId to lookup original sender for forwarding
+            status:
+              type: string
+              enum: [delivered, read]
+
+    FetchPendingMessage:
+      type: object
+      description: Fetch pending messages with optional cursor for resumable delivery
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [fetch_pending]
+        payload:
+          type: object
+          properties:
+            cursor:
+              type: string
+              description: Server-issued cursor from previous pending_messages response; omit for fresh fetch
+
+    PingMessage:
+      type: object
+      description: Keep-alive ping
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [ping]
+        payload:
+          type: object
+
+    ReportUserMessage:
+      type: object
+      description: Report a user
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [report_user]
+        payload:
+          type: object
+          required:
+            - reportedWhisperId
+            - reason
+          properties:
+            reportedWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            reason:
+              $ref: '#/components/schemas/ReportReason'
+            description:
+              type: string
+              maxLength: 500
+
+    ReactionMessage:
+      type: object
+      description: |
+        Send emoji reaction to a message.
+        Server validates messageId → conversation mapping and broadcasts to correct recipient.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [reaction]
+        payload:
+          type: object
+          required:
+            - messageId
+            - emoji
+          properties:
+            messageId:
+              type: string
+              format: uuid
+              description: Server uses messageId to determine conversation/recipient
+            emoji:
+              type: string
+              nullable: true
+              description: Emoji character or null to remove reaction
+              example: "👍"
+
+    TypingMessage:
+      type: object
+      description: |
+        Send typing indicator. Rate limited: max 1 per 2 seconds per conversation.
+        Excess messages return RATE_LIMITED error.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [typing]
+        payload:
+          type: object
+          required:
+            - toWhisperId
+            - isTyping
+          properties:
+            toWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            isTyping:
+              type: boolean
+
+    # User Management Messages (Client -> Server)
+
+    BlockUserMessage:
+      type: object
+      description: |
+        Block a user. Server enforces the following rules:
+
+        **When A blocks B:**
+        - Messages from B to A are dropped (not queued)
+        - B receives BLOCKED error on send_message attempts
+        - call_initiate from B to A returns BLOCKED error
+        - Typing indicators from B to A are not forwarded
+        - A no longer appears online to B
+
+        Block is bidirectional silent: B doesn't know they're blocked until they try to interact.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [block_user]
+        payload:
+          type: object
+          required:
+            - whisperId
+          properties:
+            whisperId:
+              $ref: '#/components/schemas/WhisperId'
+              description: Whisper ID of user to block
+
+    UnblockUserMessage:
+      type: object
+      description: Unblock a previously blocked user. Restores normal messaging.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [unblock_user]
+        payload:
+          type: object
+          required:
+            - whisperId
+          properties:
+            whisperId:
+              $ref: '#/components/schemas/WhisperId'
+              description: Whisper ID of user to unblock
+
+    DeleteAccountMessage:
+      type: object
+      description: |
+        Permanently delete account and all associated data (GDPR compliance).
+
+        **What gets deleted (irreversible):**
+        - User identity (Whisper ID, public key)
+        - All pending messages in server queue
+        - All conversation metadata on server
+        - Push notification tokens
+        - All reports/blocks associated with account
+
+        **What remains encrypted on recipients' devices:**
+        - Messages already delivered are stored locally on recipients' devices
+        - These cannot be deleted server-side (E2E encryption by design)
+
+        **Client-side cleanup (app responsibility):**
+        - Private key destruction
+        - Local message database wipe
+        - Contact list deletion
+        - Secure storage clear
+
+        **No recovery possible** - account deletion is permanent and immediate.
+
+        **Authentication required**: Must sign deletion request to prevent hijacking.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [delete_account]
+        payload:
+          type: object
+          required:
+            - confirmation
+            - signature
+          properties:
+            confirmation:
+              type: string
+              enum: [DELETE_MY_ACCOUNT]
+              description: Must be exactly "DELETE_MY_ACCOUNT" to confirm
+            timestamp:
+              $ref: '#/components/schemas/Timestamp'
+              description: Current timestamp (signature includes this to prevent replay)
+            signature:
+              type: string
+              description: Ed25519 signature of "DELETE_MY_ACCOUNT:{timestamp}" using signingPrivateKey
+
+    # Call Signaling Messages (Client -> Server)
+
+    CallInitiateMessage:
+      type: object
+      description: Initiate a voice/video call
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [call_initiate]
+        payload:
+          type: object
+          required:
+            - toWhisperId
+            - callId
+            - offer
+          properties:
+            toWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+              format: uuid
+            offer:
+              type: string
+              description: SDP offer (JSON stringified)
+
+    CallAnswerMessage:
+      type: object
+      description: Answer an incoming call
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [call_answer]
+        payload:
+          type: object
+          required:
+            - toWhisperId
+            - callId
+            - answer
+          properties:
+            toWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+            answer:
+              type: string
+              description: SDP answer (JSON stringified)
+
+    CallIceCandidateMessage:
+      type: object
+      description: Send ICE candidate for WebRTC
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [call_ice_candidate]
+        payload:
+          type: object
+          required:
+            - toWhisperId
+            - callId
+            - candidate
+          properties:
+            toWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+            candidate:
+              type: string
+              description: ICE candidate (JSON stringified)
+
+    CallEndMessage:
+      type: object
+      description: End a call
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [call_end]
+        payload:
+          type: object
+          required:
+            - toWhisperId
+            - callId
+          properties:
+            toWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+
+    # Group Messages (Client -> Server)
+
+    CreateGroupMessage:
+      type: object
+      description: Create a new group
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [create_group]
+        payload:
+          type: object
+          required:
+            - groupId
+            - name
+            - members
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            name:
+              type: string
+              minLength: 1
+              maxLength: 50
+            members:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+              minItems: 1
+              description: Member Whisper IDs (excluding creator)
+
+    SendGroupMessageMessage:
+      type: object
+      description: Send message to group
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [send_group_message]
+        payload:
+          type: object
+          required:
+            - groupId
+            - messageId
+            - encryptedContent
+            - nonce
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            messageId:
+              type: string
+              format: uuid
+            encryptedContent:
+              $ref: '#/components/schemas/EncryptedContent'
+            nonce:
+              $ref: '#/components/schemas/Nonce'
+            senderName:
+              type: string
+              description: Cached sender name for display
+
+    UpdateGroupMessage:
+      type: object
+      description: |
+        Update group settings or members.
+
+        **Authorization (server-enforced):**
+        - Only group creator can update group name
+        - Only group creator can add/remove members
+        - Non-creator requests return UNAUTHORIZED error
+
+        Server validates sender's whisperId against group creator before processing.
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [update_group]
+        payload:
+          type: object
+          required:
+            - groupId
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            name:
+              type: string
+              minLength: 1
+              maxLength: 50
+            addMembers:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+            removeMembers:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+
+    LeaveGroupMessage:
+      type: object
+      description: Leave a group
+      required:
+        - type
+        - payload
+      properties:
+        type:
+          type: string
+          enum: [leave_group]
+        payload:
+          type: object
+          required:
+            - groupId
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+
+    # Server -> Client Messages
+
+    RegisterChallengeMessage:
+      type: object
+      description: |
+        Challenge for authentication. Client must sign this challenge
+        with their private key and return register_proof.
+      properties:
+        type:
+          type: string
+          enum: [register_challenge]
+        payload:
+          type: object
+          properties:
+            challenge:
+              type: string
+              description: Base64-encoded random 32 bytes to sign
+            expiresAt:
+              $ref: '#/components/schemas/Timestamp'
+              description: Challenge expires after 30 seconds
+
+    RegisterAckMessage:
+      type: object
+      description: Registration acknowledgment (sent after successful register_proof)
+      properties:
+        type:
+          type: string
+          enum: [register_ack]
+        payload:
+          type: object
+          properties:
+            success:
+              type: boolean
+            error:
+              type: string
+
+    PushTokenAckMessage:
+      type: object
+      description: Push token update acknowledgment
+      properties:
+        type:
+          type: string
+          enum: [push_token_ack]
+        payload:
+          type: object
+          properties:
+            success:
+              type: boolean
+
+    MessageReceivedMessage:
+      type: object
+      description: Incoming message notification
+      properties:
+        type:
+          type: string
+          enum: [message_received]
+        payload:
+          type: object
+          properties:
+            messageId:
+              type: string
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            encryptedContent:
+              $ref: '#/components/schemas/EncryptedContent'
+            nonce:
+              $ref: '#/components/schemas/Nonce'
+            timestamp:
+              $ref: '#/components/schemas/Timestamp'
+
+    MessageDeliveredMessage:
+      type: object
+      description: Message delivery status
+      properties:
+        type:
+          type: string
+          enum: [message_delivered]
+        payload:
+          type: object
+          properties:
+            messageId:
+              type: string
+            status:
+              type: string
+              enum: [sent, delivered, pending]
+
+    PendingMessagesMessage:
+      type: object
+      description: |
+        Pending messages for offline user with pagination support.
+        Use cursor from response in next fetch_pending for resumable delivery.
+      properties:
+        type:
+          type: string
+          enum: [pending_messages]
+        payload:
+          type: object
+          properties:
+            messages:
+              type: array
+              items:
+                type: object
+                properties:
+                  messageId:
+                    type: string
+                    format: uuid
+                  fromWhisperId:
+                    $ref: '#/components/schemas/WhisperId'
+                  encryptedContent:
+                    $ref: '#/components/schemas/EncryptedContent'
+                  nonce:
+                    $ref: '#/components/schemas/Nonce'
+                  timestamp:
+                    $ref: '#/components/schemas/Timestamp'
+            cursor:
+              type: string
+              description: Current batch cursor
+            nextCursor:
+              type: string
+              nullable: true
+              description: Cursor for next batch (null if no more messages)
+            hasMore:
+              type: boolean
+              description: Whether more messages are available
+
+    DeliveryStatusMessage:
+      type: object
+      description: Delivery/read receipt notification
+      properties:
+        type:
+          type: string
+          enum: [delivery_status]
+        payload:
+          type: object
+          properties:
+            messageId:
+              type: string
+            status:
+              type: string
+              enum: [delivered, read]
+
+    PongMessage:
+      type: object
+      description: Pong response to ping
+      properties:
+        type:
+          type: string
+          enum: [pong]
+        payload:
+          type: object
+
+    ErrorMessage:
+      type: object
+      description: Error response
+      properties:
+        type:
+          type: string
+          enum: [error]
+        payload:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - PARSE_ERROR
+                - INVALID_ID
+                - INVALID_KEY
+                - BANNED
+                - NOT_REGISTERED
+                - INVALID_RECIPIENT
+                - INVALID_REPORTED_ID
+                - INVALID_GROUP_ID
+                - INVALID_GROUP_NAME
+                - INVALID_MEMBERS
+                - RECIPIENT_OFFLINE
+                - UNKNOWN_TYPE
+                - AUTH_FAILED
+                - CHALLENGE_EXPIRED
+                - RATE_LIMITED
+                - BLOCKED
+                - UNAUTHORIZED
+              description: |
+                Error codes:
+                - AUTH_FAILED: Signature verification failed
+                - CHALLENGE_EXPIRED: Register challenge timed out (30s)
+                - RATE_LIMITED: Too many requests (e.g., typing > 1/2s)
+                - BLOCKED: Recipient has blocked sender
+                - UNAUTHORIZED: Not permitted (e.g., non-creator updating group)
+            message:
+              type: string
+
+    ReportAckMessage:
+      type: object
+      description: Report acknowledgment
+      properties:
+        type:
+          type: string
+          enum: [report_ack]
+        payload:
+          type: object
+          properties:
+            reportId:
+              type: string
+            success:
+              type: boolean
+
+    ReactionReceivedMessage:
+      type: object
+      description: Incoming reaction notification
+      properties:
+        type:
+          type: string
+          enum: [reaction_received]
+        payload:
+          type: object
+          properties:
+            messageId:
+              type: string
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            emoji:
+              type: string
+              nullable: true
+
+    TypingStatusMessage:
+      type: object
+      description: Typing indicator notification
+      properties:
+        type:
+          type: string
+          enum: [typing_status]
+        payload:
+          type: object
+          properties:
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            isTyping:
+              type: boolean
+
+    # User Management Messages (Server -> Client)
+
+    BlockAckMessage:
+      type: object
+      description: Block user acknowledgment
+      properties:
+        type:
+          type: string
+          enum: [block_ack]
+        payload:
+          type: object
+          properties:
+            whisperId:
+              $ref: '#/components/schemas/WhisperId'
+            success:
+              type: boolean
+
+    UnblockAckMessage:
+      type: object
+      description: Unblock user acknowledgment
+      properties:
+        type:
+          type: string
+          enum: [unblock_ack]
+        payload:
+          type: object
+          properties:
+            whisperId:
+              $ref: '#/components/schemas/WhisperId'
+            success:
+              type: boolean
+
+    AccountDeletedMessage:
+      type: object
+      description: Account deletion confirmation (sent before connection close)
+      properties:
+        type:
+          type: string
+          enum: [account_deleted]
+        payload:
+          type: object
+          properties:
+            success:
+              type: boolean
+            message:
+              type: string
+              example: "Your account has been permanently deleted"
+
+    # Call Signaling Messages (Server -> Client)
+
+    IncomingCallMessage:
+      type: object
+      description: Incoming call notification
+      properties:
+        type:
+          type: string
+          enum: [incoming_call]
+        payload:
+          type: object
+          properties:
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+            offer:
+              type: string
+              description: SDP offer
+
+    CallAnsweredMessage:
+      type: object
+      description: Call answered notification
+      properties:
+        type:
+          type: string
+          enum: [call_answered]
+        payload:
+          type: object
+          properties:
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+            answer:
+              type: string
+              description: SDP answer
+
+    CallIceCandidateReceivedMessage:
+      type: object
+      description: ICE candidate received
+      properties:
+        type:
+          type: string
+          enum: [call_ice_candidate]
+        payload:
+          type: object
+          properties:
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+            candidate:
+              type: string
+
+    CallEndedMessage:
+      type: object
+      description: Call ended notification
+      properties:
+        type:
+          type: string
+          enum: [call_ended]
+        payload:
+          type: object
+          properties:
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            callId:
+              type: string
+
+    # Group Messages (Server -> Client)
+
+    GroupCreatedMessage:
+      type: object
+      description: Group created notification
+      properties:
+        type:
+          type: string
+          enum: [group_created]
+        payload:
+          type: object
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            name:
+              type: string
+            createdBy:
+              $ref: '#/components/schemas/WhisperId'
+            members:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+            createdAt:
+              $ref: '#/components/schemas/Timestamp'
+
+    GroupMessageReceivedMessage:
+      type: object
+      description: Group message received
+      properties:
+        type:
+          type: string
+          enum: [group_message_received]
+        payload:
+          type: object
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            messageId:
+              type: string
+            fromWhisperId:
+              $ref: '#/components/schemas/WhisperId'
+            encryptedContent:
+              $ref: '#/components/schemas/EncryptedContent'
+            nonce:
+              $ref: '#/components/schemas/Nonce'
+            timestamp:
+              $ref: '#/components/schemas/Timestamp'
+            senderName:
+              type: string
+
+    GroupUpdatedMessage:
+      type: object
+      description: Group updated notification
+      properties:
+        type:
+          type: string
+          enum: [group_updated]
+        payload:
+          type: object
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            updatedBy:
+              $ref: '#/components/schemas/WhisperId'
+            name:
+              type: string
+            addedMembers:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+            removedMembers:
+              type: array
+              items:
+                $ref: '#/components/schemas/WhisperId'
+
+    MemberLeftGroupMessage:
+      type: object
+      description: Member left group notification
+      properties:
+        type:
+          type: string
+          enum: [member_left_group]
+        payload:
+          type: object
+          properties:
+            groupId:
+              $ref: '#/components/schemas/GroupId'
+            memberId:
+              $ref: '#/components/schemas/WhisperId'
+
+  responses:
+    Unauthorized:
+      description: Unauthorized - Invalid or missing API key
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Unauthorized
+
+    BadRequest:
+      description: Bad request - Invalid parameters
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+
+# WebSocket Protocol Documentation
+x-websocket-protocol:
+  description: |
+    ## WebSocket Connection
+
+    Connect to `ws://server:3031` or `wss://api.whisper.sarjmobile.com`
+
+    ## Message Flow
+
+    ### 1. Registration (Challenge-Response)
+    ```json
+    // Step 1: Client -> Server (initiate)
+    {
+      "type": "register",
+      "payload": {
+        "whisperId": "WSP-A1B2-C3D4-E5F6",
+        "publicKey": "base64_x25519_public_key",
+        "signingPublicKey": "base64_ed25519_public_key",
+        "pushToken": "fcm_or_apns_token",
+        "prefs": { "sendReadReceipts": true, "sendTypingIndicator": true, "hideOnlineStatus": false }
+      }
+    }
+
+    // Step 2: Server -> Client (challenge)
+    {
+      "type": "register_challenge",
+      "payload": { "challenge": "random_32_bytes_base64", "expiresAt": 1705132830000 }
+    }
+
+    // Step 3: Client -> Server (proof)
+    {
+      "type": "register_proof",
+      "payload": { "signature": "Ed25519.sign(challenge, signingPrivateKey)" }
+    }
+
+    // Step 4: Server -> Client (success)
+    {
+      "type": "register_ack",
+      "payload": { "success": true }
+    }
+
+    // Or error if signature invalid:
+    {
+      "type": "error",
+      "payload": { "code": "AUTH_FAILED", "message": "Signature verification failed" }
+    }
+    ```
+
+    ### 2. Send Message
+    ```json
+    // Client -> Server
+    {
+      "type": "send_message",
+      "payload": {
+        "messageId": "uuid",
+        "toWhisperId": "WSP-X1Y2-Z3A4-B5C6",
+        "encryptedContent": "base64_encrypted",
+        "nonce": "base64_nonce"
+      }
+    }
+
+    // Server -> Client (sender)
+    {
+      "type": "message_delivered",
+      "payload": { "messageId": "uuid", "status": "delivered" }
+    }
+
+    // Server -> Client (recipient)
+    {
+      "type": "message_received",
+      "payload": {
+        "messageId": "uuid",
+        "fromWhisperId": "WSP-A1B2-C3D4-E5F6",
+        "encryptedContent": "base64_encrypted",
+        "nonce": "base64_nonce",
+        "timestamp": 1705132800000
+      }
+    }
+    ```
+
+    ### 3. Voice/Video Call (WebRTC Signaling)
+    ```json
+    // Caller -> Server
+    { "type": "call_initiate", "payload": { "toWhisperId": "...", "callId": "...", "offer": "SDP" } }
+
+    // Server -> Callee
+    { "type": "incoming_call", "payload": { "fromWhisperId": "...", "callId": "...", "offer": "SDP" } }
+
+    // Callee -> Server
+    { "type": "call_answer", "payload": { "toWhisperId": "...", "callId": "...", "answer": "SDP" } }
+
+    // Both: Exchange ICE candidates
+    { "type": "call_ice_candidate", "payload": { "toWhisperId": "...", "callId": "...", "candidate": "ICE" } }
+
+    // Either party ends
+    { "type": "call_end", "payload": { "toWhisperId": "...", "callId": "..." } }
+    ```
+
+    ### 4. Group Chat
+    ```json
+    // Create group
+    { "type": "create_group", "payload": { "groupId": "GRP-...", "name": "Friends", "members": ["WSP-..."] } }
+
+    // Send group message
+    { "type": "send_group_message", "payload": { "groupId": "GRP-...", "messageId": "...", "encryptedContent": "...", "nonce": "..." } }
+
+    // Update group
+    { "type": "update_group", "payload": { "groupId": "GRP-...", "name": "New Name", "addMembers": ["WSP-..."] } }
+
+    // Leave group
+    { "type": "leave_group", "payload": { "groupId": "GRP-..." } }
+    ```
+
+    ### 5. User Management
+    ```json
+    // Block user
+    { "type": "block_user", "payload": { "whisperId": "WSP-..." } }
+    // Response: { "type": "block_ack", "payload": { "whisperId": "WSP-...", "success": true } }
+
+    // Unblock user
+    { "type": "unblock_user", "payload": { "whisperId": "WSP-..." } }
+    // Response: { "type": "unblock_ack", "payload": { "whisperId": "WSP-...", "success": true } }
+
+    // Delete account (GDPR) - requires signature to prevent hijacking
+    { "type": "delete_account", "payload": {
+        "confirmation": "DELETE_MY_ACCOUNT",
+        "timestamp": 1705132800000,
+        "signature": "Ed25519.sign('DELETE_MY_ACCOUNT:1705132800000', signingPrivateKey)"
+    } }
+    // Response: { "type": "account_deleted", "payload": { "success": true } }
+    // Connection closes after this message
+    ```
+
+    ## Error Codes
+
+    | Code | Description |
+    |------|-------------|
+    | PARSE_ERROR | Invalid JSON message |
+    | INVALID_ID | Invalid Whisper ID format |
+    | INVALID_KEY | Invalid public key |
+    | BANNED | Account has been suspended |
+    | NOT_REGISTERED | Must register before sending messages |
+    | INVALID_RECIPIENT | Invalid recipient Whisper ID |
+    | RECIPIENT_OFFLINE | Recipient not available (for calls) |
+    | INVALID_GROUP_ID | Invalid group ID format |
+    | UNKNOWN_TYPE | Unknown message type |
+    | AUTH_FAILED | Signature verification failed |
+    | CHALLENGE_EXPIRED | Register challenge timed out (30s) |
+    | RATE_LIMITED | Too many requests (e.g., typing > 1/2s) |
+    | BLOCKED | Recipient has blocked sender |
+    | UNAUTHORIZED | Not permitted (e.g., non-creator updating group) |
+
+  client-message-types:
+    - register
+    - register_proof
+    - update_push_token
+    - send_message
+    - delivery_receipt
+    - fetch_pending
+    - ping
+    - report_user
+    - reaction
+    - typing
+    - block_user
+    - unblock_user
+    - delete_account
+    - call_initiate
+    - call_answer
+    - call_ice_candidate
+    - call_end
+    - create_group
+    - send_group_message
+    - update_group
+    - leave_group
+    # Reserved for v2:
+    # - rotate_group_key
+
+  server-message-types:
+    - register_challenge
+    - register_ack
+    - push_token_ack
+    - message_received
+    - message_delivered
+    - pending_messages
+    - delivery_status
+    - pong
+    - error
+    - report_ack
+    - reaction_received
+    - typing_status
+    - block_ack
+    - unblock_ack
+    - account_deleted
+    - incoming_call
+    - call_answered
+    - call_ice_candidate
+    - call_ended
+    - group_created
+    - group_message_received
+    - group_updated
+    - member_left_group
+    # Reserved for v2:
+    # - group_key_rotated
