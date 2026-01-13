@@ -265,7 +265,7 @@ export default function SettingsScreen() {
             <TouchableOpacity style={styles.menuItem} onPress={handleChangePin}>
               <Text style={styles.menuIcon}>🔢</Text>
               <Text style={styles.menuText}>Change PIN</Text>
-              <Text style={styles.chevron}>-></Text>
+              <Text style={styles.chevron}>›</Text>
             </TouchableOpacity>
           )}
           <View style={styles.menuItem}>

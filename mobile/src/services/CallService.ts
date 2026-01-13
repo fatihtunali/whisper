@@ -77,7 +77,7 @@ class CallService {
 
       // Use react-native-webrtc's mediaDevices
       const stream = await mediaDevices.getUserMedia(constraints);
-      this.localStream = stream as MediaStream;
+      this.localStream = stream as unknown as MediaStream;
       console.log('[CallService] Local media stream initialized');
       return this.localStream;
     } catch (error) {
@@ -330,7 +330,7 @@ class CallService {
 
     this.peerConnection = new RTCPeerConnection({
       iceServers: ICE_SERVERS,
-    }) as RTCPeerConnection;
+    }) as unknown as RTCPeerConnection;
 
     // Handle ICE candidates
     (this.peerConnection as any).onicecandidate = (event: any) => {

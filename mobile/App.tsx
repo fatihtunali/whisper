@@ -18,7 +18,9 @@ import AppLockScreen from './src/screens/AppLockScreen';
 // Import main navigator with all screens
 import MainNavigator from './src/navigation/MainNavigator';
 
-const AuthStack = createNativeStackNavigator();
+import { AuthStackParamList } from './src/types';
+
+const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 
 function AuthNavigator() {
   const { colors } = useTheme();

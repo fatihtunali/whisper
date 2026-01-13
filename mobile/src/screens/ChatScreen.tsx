@@ -20,8 +20,9 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
-import { useAudioRecorder, AudioModule, RecordingPresets, AudioPlayer } from 'expo-audio';
+import * as FileSystem from 'expo-file-system/legacy';
+import { documentDirectory } from 'expo-file-system/legacy';
+import { useAudioRecorder, AudioModule, RecordingPresets } from 'expo-audio';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -66,9 +67,10 @@ export default function ChatScreen() {
   const lastTypingSentRef = useRef<number>(0);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const audioPlayerRef = useRef<AudioPlayer | null>(null);
+  const audioPlayerRef = useRef<InstanceType<typeof AudioModule.AudioPlayer> | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
+  const isMountedRef = useRef(true);
 
   // Max image size for sending (compress larger images)
   const MAX_IMAGE_SIZE = 1024; // Max width or height in pixels
@@ -120,6 +122,7 @@ export default function ChatScreen() {
   useEffect(() => {
     // Handle incoming messages
     const handleIncomingMessage = (message: Message, msgContact: Contact) => {
+      if (!isMountedRef.current) return;
       if (msgContact.whisperId === contactId) {
         setMessages(prev => [message, ...prev]);
       }
@@ -127,6 +130,7 @@ export default function ChatScreen() {
 
     // Handle status updates for our sent messages
     const handleStatusUpdate = async (messageId: string, status: Message['status']) => {
+      if (!isMountedRef.current) return;
       setMessages(prev =>
         prev.map(m => (m.id === messageId ? { ...m, status } : m))
       );
@@ -135,6 +139,7 @@ export default function ChatScreen() {
 
     // Handle incoming reactions
     const handleReaction = (messageId: string, oderId: string, emoji: string | null) => {
+      if (!isMountedRef.current) return;
       setMessages(prev =>
         prev.map(m => {
           if (m.id === messageId) {
@@ -153,6 +158,7 @@ export default function ChatScreen() {
 
     // Handle incoming typing status
     const handleTypingStatus = (fromWhisperId: string, isTyping: boolean) => {
+      if (!isMountedRef.current) return;
       if (fromWhisperId === contactId) {
         setIsContactTyping(isTyping);
       }
@@ -173,13 +179,16 @@ export default function ChatScreen() {
 
   const loadData = async () => {
     const contactData = await secureStorage.getContact(contactId);
+    if (!isMountedRef.current) return;
     setContact(contactData);
 
     // Ensure conversation exists and load it
     const conv = await secureStorage.getOrCreateConversation(contactId);
+    if (!isMountedRef.current) return;
     setConversation(conv);
 
     const msgs = await secureStorage.getMessages(contactId);
+    if (!isMountedRef.current) return;
     setMessages(msgs.reverse());
   };
 
@@ -367,7 +376,7 @@ export default function ChatScreen() {
 
       // Read file as base64
       const fileBase64 = await FileSystem.readAsStringAsync(file.uri, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64',
       });
 
       // Create file attachment
@@ -470,7 +479,7 @@ export default function ChatScreen() {
       const height = asset.height || 300;
 
       // Save image locally for display
-      const imagesDir = `${FileSystem.documentDirectory}images/`;
+      const imagesDir = `${documentDirectory}images/`;
       const dirInfo = await FileSystem.getInfoAsync(imagesDir);
       if (!dirInfo.exists) {
         await FileSystem.makeDirectoryAsync(imagesDir, { intermediates: true });
@@ -511,8 +520,8 @@ export default function ChatScreen() {
 
       // Set audio mode for recording
       await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
 
       // Start recording using the hook's recorder
@@ -552,7 +561,7 @@ export default function ChatScreen() {
 
       // Reset audio mode
       await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: false,
+        allowsRecording: false,
       });
 
       if (uri && contact) {
@@ -582,7 +591,7 @@ export default function ChatScreen() {
 
       // Reset audio mode
       await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: false,
+        allowsRecording: false,
       });
 
       console.log('Recording cancelled');
@@ -599,7 +608,7 @@ export default function ChatScreen() {
     try {
       // Read file as base64
       const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64',
       });
 
       // Send via messaging service
@@ -636,12 +645,12 @@ export default function ChatScreen() {
 
       // Set audio mode for playback
       await AudioModule.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
+        allowsRecording: false,
+        playsInSilentMode: true,
       });
 
       // Create and play the sound
-      const player = new AudioPlayer({ uri: voiceUri });
+      const player = new AudioModule.AudioPlayer(voiceUri, 500, false);
 
       // Set up listener for when playback finishes
       player.addListener('playbackStatusUpdate', (status) => {
@@ -676,25 +685,34 @@ export default function ChatScreen() {
 
   // Cleanup voice and typing on unmount
   useEffect(() => {
+    isMountedRef.current = true;
     return () => {
-      if (audioRecorder.isRecording) {
-        audioRecorder.stop();
-      }
-      if (audioPlayerRef.current) {
-        audioPlayerRef.current.release();
-      }
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-      }
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      // Send stop typing when leaving chat
-      if (privacySettingsRef.current.typingIndicator) {
-        messagingService.sendTypingStatus(contactId, false);
+      isMountedRef.current = false;
+      try {
+        // Stop audio player if playing
+        if (audioPlayerRef.current) {
+          audioPlayerRef.current.release();
+          audioPlayerRef.current = null;
+        }
+        // Clear recording timer
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+          recordingTimerRef.current = null;
+        }
+        // Clear typing timeout
+        if (typingTimeoutRef.current) {
+          clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = null;
+        }
+        // Send stop typing when leaving chat
+        if (privacySettingsRef.current.typingIndicator) {
+          messagingService.sendTypingStatus(contactId, false);
+        }
+      } catch (error) {
+        console.log('[ChatScreen] Cleanup error:', error);
       }
     };
-  }, [contactId, audioRecorder]);
+  }, [contactId]);
 
   const handleLongPressMessage = (message: Message) => {
     // Show emoji picker for reactions on long press

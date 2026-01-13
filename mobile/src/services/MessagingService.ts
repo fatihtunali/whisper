@@ -1043,7 +1043,7 @@ class MessagingService {
         addedAt: timestamp,
         isMessageRequest: true, // Flag to indicate this is a message request
       };
-      await secureStorage.saveContact(contact);
+      await secureStorage.addContact(contact);
     }
 
     if (!contact) {
@@ -1164,7 +1164,7 @@ class MessagingService {
   private async saveVoiceToFile(base64Data: string, messageId: string): Promise<string | null> {
     try {
       // Dynamic import to avoid loading file system when not needed
-      const FileSystem = await import('expo-file-system');
+      const FileSystem = await import('expo-file-system/legacy');
       const voiceDir = `${FileSystem.documentDirectory}voices/`;
 
       // Ensure directory exists
@@ -1189,7 +1189,7 @@ class MessagingService {
   private async saveFileToLocal(base64Data: string, messageId: string, fileName: string): Promise<string | null> {
     try {
       // Dynamic import to avoid loading file system when not needed
-      const FileSystem = await import('expo-file-system');
+      const FileSystem = await import('expo-file-system/legacy');
       const filesDir = `${FileSystem.documentDirectory}files/`;
 
       // Ensure directory exists
@@ -1555,7 +1555,7 @@ class MessagingService {
       const existingContact = await secureStorage.getContact(toWhisperId);
       if (!existingContact) {
         // Save as a contact (they can be removed if blocked/rejected)
-        await secureStorage.saveContact(tempContact);
+        await secureStorage.addContact(tempContact);
       }
 
       // Now send the message using the normal flow
