@@ -13,6 +13,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RootStackParamList, Contact } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
+import { messagingService } from '../services/MessagingService';
 import { colors, spacing, fontSize, borderRadius } from '../utils/theme';
 import { moderateScale, scaleFontSize } from '../utils/responsive';
 import { isValidWhisperId } from '../utils/helpers';
@@ -32,14 +33,9 @@ export default function AddContactScreen() {
     setError('');
 
     // Validate Whisper ID
-    if (!isValidWhisperId(whisperId.toUpperCase())) {
+    const normalizedId = whisperId.toUpperCase().trim();
+    if (!isValidWhisperId(normalizedId)) {
       setError('Invalid Whisper ID format. Should be WSP-XXXX-XXXX-XXXX');
-      return;
-    }
-
-    // Validate public key
-    if (!publicKey.trim()) {
-      setError('Public key is required');
       return;
     }
 
@@ -47,16 +43,46 @@ export default function AddContactScreen() {
 
     try {
       // Check if contact already exists
-      const existing = await secureStorage.getContact(whisperId.toUpperCase());
+      const existing = await secureStorage.getContact(normalizedId);
       if (existing) {
         setError('This contact already exists');
         setIsLoading(false);
         return;
       }
 
+      let contactPublicKey = publicKey.trim();
+
+      // If no public key provided, look it up from the server
+      if (!contactPublicKey) {
+        if (!messagingService.isConnected()) {
+          setError('Not connected to server. Please check your connection.');
+          setIsLoading(false);
+          return;
+        }
+
+        try {
+          console.log('[AddContact] Looking up public key for:', normalizedId);
+          const lookup = await messagingService.lookupPublicKey(normalizedId);
+
+          if (!lookup.exists || !lookup.publicKey) {
+            setError('User not found. Make sure the Whisper ID is correct.');
+            setIsLoading(false);
+            return;
+          }
+
+          contactPublicKey = lookup.publicKey;
+          console.log('[AddContact] Found public key for:', normalizedId);
+        } catch (lookupError) {
+          console.error('[AddContact] Lookup error:', lookupError);
+          setError('Failed to find user. Please try again or enter their public key manually.');
+          setIsLoading(false);
+          return;
+        }
+      }
+
       const contact: Contact = {
-        whisperId: whisperId.toUpperCase(),
-        publicKey: publicKey.trim(),
+        whisperId: normalizedId,
+        publicKey: contactPublicKey,
         nickname: nickname.trim() || undefined,
         addedAt: Date.now(),
       };
@@ -116,12 +142,12 @@ export default function AddContactScreen() {
         </View>
 
         <View style={styles.inputContainer}>
-          <Text style={styles.inputLabel}>Public Key *</Text>
+          <Text style={styles.inputLabel}>Public Key (optional)</Text>
           <TextInput
             style={[styles.input, styles.inputMultiline]}
             value={publicKey}
             onChangeText={setPublicKey}
-            placeholder="Paste the contact's public key"
+            placeholder="Will be looked up automatically if not provided"
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
             autoCorrect={false}

@@ -52,7 +52,8 @@ export type ClientMessageType =
   | 'create_group'
   | 'send_group_message'
   | 'update_group'
-  | 'leave_group';
+  | 'leave_group'
+  | 'lookup_public_key';
 
 // Server -> Client message types
 export type ServerMessageType =
@@ -77,7 +78,8 @@ export type ServerMessageType =
   | 'group_created'
   | 'group_message_received'
   | 'group_updated'
-  | 'member_left_group';
+  | 'member_left_group'
+  | 'public_key_response';
 
 // Client -> Server messages
 export interface RegisterMessage {
@@ -254,6 +256,15 @@ export interface LeaveGroupMessage {
   };
 }
 
+// Lookup public key message (Client -> Server)
+// Used for message requests: find a user's public key by Whisper ID
+export interface LookupPublicKeyMessage {
+  type: 'lookup_public_key';
+  payload: {
+    whisperId: string;           // Whisper ID to look up
+  };
+}
+
 export type ClientMessage =
   | RegisterMessage
   | RegisterProofMessage
@@ -274,7 +285,8 @@ export type ClientMessage =
   | CreateGroupMessage
   | SendGroupMessageMessage
   | UpdateGroupMessage
-  | LeaveGroupMessage;
+  | LeaveGroupMessage
+  | LookupPublicKeyMessage;
 
 // Server -> Client messages
 export interface RegisterChallengeMessage {
@@ -480,6 +492,17 @@ export interface MemberLeftGroupMessage {
   };
 }
 
+// Public key response message (Server -> Client)
+// Response to lookup_public_key request
+export interface PublicKeyResponseMessage {
+  type: 'public_key_response';
+  payload: {
+    whisperId: string;           // Whisper ID that was looked up
+    publicKey: string | null;    // Public key if found, null if user doesn't exist
+    exists: boolean;             // Whether the user exists in the system
+  };
+}
+
 export type ServerMessage =
   | RegisterChallengeMessage
   | RegisterAckMessage
@@ -502,4 +525,5 @@ export type ServerMessage =
   | GroupCreatedMessage
   | GroupMessageReceivedMessage
   | GroupUpdatedMessage
-  | MemberLeftGroupMessage;
+  | MemberLeftGroupMessage
+  | PublicKeyResponseMessage;

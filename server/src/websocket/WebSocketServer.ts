@@ -29,6 +29,7 @@ import {
   GroupMessageReceivedMessage,
   GroupUpdatedMessage,
   MemberLeftGroupMessage,
+  PublicKeyResponseMessage,
 } from '../types';
 import nacl from 'tweetnacl';
 
@@ -173,6 +174,10 @@ export class WebSocketServer {
 
       case 'leave_group':
         this.handleLeaveGroup(socket, message.payload);
+        break;
+
+      case 'lookup_public_key':
+        this.handleLookupPublicKey(socket, message.payload);
         break;
 
       default:
@@ -1113,6 +1118,49 @@ export class WebSocketServer {
     }
 
     console.log(`[WebSocket] Member ${client.whisperId} left group ${groupId}`);
+  }
+
+  // Public key lookup handler - for message requests
+  private handleLookupPublicKey(
+    socket: WebSocket,
+    payload: { whisperId: string }
+  ): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const { whisperId } = payload;
+
+    // Validate Whisper ID format
+    if (!whisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(whisperId)) {
+      this.sendError(socket, 'INVALID_ID', 'Invalid Whisper ID format');
+      return;
+    }
+
+    // Cannot look up yourself
+    if (whisperId === client.whisperId) {
+      this.sendError(socket, 'INVALID_OPERATION', 'Cannot look up your own public key');
+      return;
+    }
+
+    // Check if user exists and get their public key
+    const publicKey = connectionManager.getPublicKey(whisperId);
+    const exists = connectionManager.userExists(whisperId);
+
+    // Send response
+    const response: PublicKeyResponseMessage = {
+      type: 'public_key_response',
+      payload: {
+        whisperId,
+        publicKey,
+        exists,
+      },
+    };
+    this.send(socket, response);
+
+    console.log(`[WebSocket] Public key lookup for ${whisperId} by ${client.whisperId}: ${exists ? 'found' : 'not found'}`);
   }
 
   private send(socket: WebSocket, message: ServerMessage): void {

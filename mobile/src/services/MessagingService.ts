@@ -15,6 +15,13 @@ type TypingHandler = (fromWhisperId: string, isTyping: boolean) => void;
 type GroupMessageHandler = (message: Message, group: Group) => void;
 type GroupUpdateHandler = (groupId: string, updates: Partial<Group>) => void;
 
+// Public key lookup result
+interface PublicKeyLookupResult {
+  whisperId: string;
+  publicKey: string | null;
+  exists: boolean;
+}
+
 class MessagingService {
   private ws: WebSocket | null = null;
   private user: LocalUser | null = null;
@@ -22,6 +29,12 @@ class MessagingService {
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
   private isConnecting = false;
+
+  // Pending public key lookups - for async request/response
+  private pendingLookups: Map<string, {
+    resolve: (result: PublicKeyLookupResult) => void;
+    reject: (error: Error) => void;
+  }> = new Map();
 
   // Event handlers - now arrays to support multiple listeners
   private messageHandlers: Set<MessageHandler> = new Set();
@@ -905,6 +918,10 @@ class MessagingService {
         case 'member_left_group':
           await this.handleMemberLeftGroup(message.payload);
           break;
+
+        case 'public_key_response':
+          this.handlePublicKeyResponse(message.payload);
+          break;
       }
     } catch (error) {
       console.error('[MessagingService] Failed to parse message:', error);
@@ -1435,6 +1452,123 @@ class MessagingService {
     this.notifyGroupUpdateHandlers(groupId, { members: newMembers });
 
     console.log('[MessagingService] Member', memberId, 'left group:', groupId);
+  }
+
+  // ============ PUBLIC KEY LOOKUP FOR MESSAGE REQUESTS ============
+
+  // Private: Handle public key response from server
+  private handlePublicKeyResponse(payload: {
+    whisperId: string;
+    publicKey: string | null;
+    exists: boolean;
+  }): void {
+    const { whisperId, publicKey, exists } = payload;
+    console.log('[MessagingService] Public key response for', whisperId, ':', exists ? 'found' : 'not found');
+
+    // Find and resolve the pending lookup
+    const pending = this.pendingLookups.get(whisperId);
+    if (pending) {
+      pending.resolve({ whisperId, publicKey, exists });
+      this.pendingLookups.delete(whisperId);
+    }
+  }
+
+  // Public: Lookup a user's public key by Whisper ID
+  // Returns null if user doesn't exist, or their public key if found
+  async lookupPublicKey(whisperId: string): Promise<PublicKeyLookupResult> {
+    if (!this.isConnected()) {
+      throw new Error('Not connected to server');
+    }
+
+    // Check if there's already a pending lookup
+    const existing = this.pendingLookups.get(whisperId);
+    if (existing) {
+      return new Promise((resolve, reject) => {
+        // Wait for the existing lookup to complete
+        const originalResolve = existing.resolve;
+        existing.resolve = (result) => {
+          originalResolve(result);
+          resolve(result);
+        };
+      });
+    }
+
+    return new Promise((resolve, reject) => {
+      // Set a timeout for the lookup
+      const timeout = setTimeout(() => {
+        this.pendingLookups.delete(whisperId);
+        reject(new Error('Public key lookup timed out'));
+      }, 10000); // 10 second timeout
+
+      // Store the resolve function
+      this.pendingLookups.set(whisperId, {
+        resolve: (result) => {
+          clearTimeout(timeout);
+          resolve(result);
+        },
+        reject: (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        },
+      });
+
+      // Send the lookup request
+      this.send({
+        type: 'lookup_public_key',
+        payload: { whisperId },
+      });
+    });
+  }
+
+  // Public: Send a message request to a user using only their Whisper ID
+  // This looks up their public key first, then sends the message
+  async sendMessageRequest(
+    toWhisperId: string,
+    content: string
+  ): Promise<{ success: boolean; message?: Message; error?: string }> {
+    if (!this.user) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    if (!this.isConnected()) {
+      return { success: false, error: 'Not connected to server' };
+    }
+
+    try {
+      // First, look up the recipient's public key
+      console.log('[MessagingService] Looking up public key for', toWhisperId);
+      const lookup = await this.lookupPublicKey(toWhisperId);
+
+      if (!lookup.exists || !lookup.publicKey) {
+        return { success: false, error: 'User not found' };
+      }
+
+      // Create a temporary contact to send the message
+      const tempContact: Contact = {
+        whisperId: toWhisperId,
+        publicKey: lookup.publicKey,
+        addedAt: Date.now(),
+        isMessageRequest: false, // This is an outgoing request, not incoming
+      };
+
+      // Check if we already have this contact
+      const existingContact = await secureStorage.getContact(toWhisperId);
+      if (!existingContact) {
+        // Save as a contact (they can be removed if blocked/rejected)
+        await secureStorage.saveContact(tempContact);
+      }
+
+      // Now send the message using the normal flow
+      const message = await this.sendMessage(existingContact || tempContact, content);
+
+      return { success: true, message };
+    } catch (error) {
+      console.error('[MessagingService] Failed to send message request:', error);
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
   }
 }
 

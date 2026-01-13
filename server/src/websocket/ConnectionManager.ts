@@ -1,5 +1,6 @@
 import { WebSocket } from 'ws';
 import { ConnectedClient, PrivacyPrefs } from '../types';
+import { publicKeyStore } from '../services/PublicKeyStore';
 
 class ConnectionManager {
   private clients: Map<string, ConnectedClient> = new Map();
@@ -33,6 +34,9 @@ class ConnectionManager {
     };
 
     this.clients.set(whisperId, client);
+
+    // Store public keys persistently (survives disconnection for message requests)
+    publicKeyStore.store(whisperId, publicKey, signingPublicKey);
 
     // Store push token separately (persists when user goes offline)
     if (pushToken) {
@@ -130,6 +134,22 @@ class ConnectionManager {
   // Get push token for a user (even if offline)
   getPushToken(whisperId: string): string | null {
     return this.pushTokens.get(whisperId) || null;
+  }
+
+  // Get public key for a user (works even when offline)
+  getPublicKey(whisperId: string): string | null {
+    // First check if user is online
+    const client = this.clients.get(whisperId);
+    if (client) {
+      return client.publicKey;
+    }
+    // Fall back to persistent store
+    return publicKeyStore.getPublicKey(whisperId);
+  }
+
+  // Check if a user exists in the system (has ever connected)
+  userExists(whisperId: string): boolean {
+    return publicKeyStore.exists(whisperId);
   }
 
   // Clean up stale connections (no ping for 2 minutes)

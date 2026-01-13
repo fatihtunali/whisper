@@ -37,8 +37,8 @@ class MessageRouter {
     const recipientSocket = connectionManager.getSocket(toWhisperId);
 
     // Get sender's public key for recipients who don't have sender in contacts
-    const sender = connectionManager.get(fromWhisperId);
-    const senderPublicKey = sender?.publicKey;
+    // Use getPublicKey which falls back to persistent store when sender is offline
+    const senderPublicKey = connectionManager.getPublicKey(fromWhisperId) || undefined;
 
     if (recipientSocket) {
       // Recipient is online - deliver immediately
