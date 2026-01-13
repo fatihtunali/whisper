@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,9 @@ import {
   Image,
   ActivityIndicator,
   Dimensions,
+  Animated,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
@@ -775,6 +777,51 @@ export default function ChatScreen() {
     );
   };
 
+  // Delete a single message
+  const handleDeleteMessage = useCallback(async (message: Message) => {
+    Alert.alert(
+      'Delete Message',
+      'Are you sure you want to delete this message? This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            // Remove from local state
+            setMessages(prev => prev.filter(m => m.id !== message.id));
+            // Remove from storage
+            await secureStorage.deleteMessage(contactId, message.id);
+          },
+        },
+      ]
+    );
+  }, [contactId]);
+
+  // Render the swipeable delete action
+  const renderRightActions = useCallback((
+    progress: Animated.AnimatedInterpolation<number>,
+    dragX: Animated.AnimatedInterpolation<number>,
+    message: Message
+  ) => {
+    const scale = dragX.interpolate({
+      inputRange: [-100, 0],
+      outputRange: [1, 0],
+      extrapolate: 'clamp',
+    });
+
+    return (
+      <TouchableOpacity
+        style={styles.swipeDeleteButton}
+        onPress={() => handleDeleteMessage(message)}
+      >
+        <Animated.Text style={[styles.swipeDeleteText, { transform: [{ scale }] }]}>
+          Delete
+        </Animated.Text>
+      </TouchableOpacity>
+    );
+  }, [handleDeleteMessage]);
+
   const showMessageOptionsMenu = (message: Message) => {
     // Only allow forwarding text messages (not voice, image, or file)
     const canForward = message.content && !message.voice && !message.image && !message.file;
@@ -1077,136 +1124,142 @@ export default function ChatScreen() {
     }
 
     return (
-      <Pressable
-        onLongPress={() => handleLongPressMessage(item)}
-        delayLongPress={500}
-        style={[styles.messageContainer, isMine && styles.messageContainerMine]}
+      <Swipeable
+        renderRightActions={(progress, dragX) => renderRightActions(progress, dragX, item)}
+        rightThreshold={40}
+        overshootRight={false}
       >
-        <View style={[
-          styles.messageBubble,
-          isMine ? styles.messageBubbleMine : styles.messageBubbleTheirs,
-          hasImage && styles.imageBubble
-        ]}>
-          {/* Forwarded Label */}
-          {item.isForwarded && (
-            <Text style={[styles.forwardedLabel, isMine && styles.forwardedLabelMine]}>
-              Forwarded
-            </Text>
-          )}
-          {/* Reply Quote */}
-          {hasReply && (
-            <View style={[styles.replyQuote, isMine ? styles.replyQuoteMine : styles.replyQuoteTheirs]}>
-              <Text style={[styles.replyQuoteSender, isMine && styles.replyQuoteSenderMine]}>
-                {replySenderName}
-              </Text>
-              <Text
-                style={[styles.replyQuoteText, isMine && styles.replyQuoteTextMine]}
-                numberOfLines={2}
-              >
-                {item.replyTo!.content}
-              </Text>
-            </View>
-          )}
-          {/* Image Message */}
-          {hasImage && item.image && (
-            <Image
-              source={{ uri: item.image.uri }}
-              style={[styles.messageImage, { width: imageWidth, height: imageHeight }]}
-              resizeMode="cover"
-            />
-          )}
-          {/* Voice Message */}
-          {item.voice ? (
-            <TouchableOpacity
-              style={styles.voiceMessageContainer}
-              onPress={() => playVoice(item.id, item.voice!.uri)}
-            >
-              <View style={[styles.voicePlayButton, isMine && styles.voicePlayButtonMine]}>
-                <Text style={styles.voicePlayButtonText}>
-                  {playingVoiceId === item.id ? '||' : '\u25B6'}
-                </Text>
-              </View>
-              <View style={styles.voiceWaveform}>
-                <View style={[styles.voiceWaveformBar, { height: 8 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 14 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 10 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 18 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 12 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 16 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 8 }]} />
-                <View style={[styles.voiceWaveformBar, { height: 14 }]} />
-              </View>
-              <Text style={[styles.voiceDuration, isMine && styles.voiceDurationMine]}>
-                {formatVoiceDurationMs(item.voice.duration)}
-              </Text>
-            </TouchableOpacity>
-          ) : item.file ? (
-            <TouchableOpacity
-              style={[styles.fileCard, isMine ? styles.fileCardMine : styles.fileCardTheirs]}
-              onPress={() => handleOpenFile(item.file!)}
-            >
-              <Text style={styles.fileIcon}>{getFileIcon(item.file.mimeType)}</Text>
-              <View style={styles.fileInfo}>
-                <Text
-                  style={[styles.fileName, isMine && styles.fileNameMine]}
-                  numberOfLines={1}
-                >
-                  {item.file.name}
-                </Text>
-                <Text style={[styles.fileSize, isMine && styles.fileSizeMine]}>
-                  {formatFileSize(item.file.size)}
-                </Text>
-              </View>
-              <Text style={[styles.fileOpenIcon, isMine && styles.fileOpenIconMine]}>
-                {'\u2197'}
-              </Text>
-            </TouchableOpacity>
-          ) : (
-            <Text style={[styles.messageText, isMine && styles.messageTextMine]}>
-              {item.content}
-            </Text>
-          )}
-          <View style={styles.messageFooter}>
-            <Text style={[styles.messageTime, isMine && styles.messageTimeMine]}>
-              {formatTime(item.timestamp)}
-            </Text>
-            {isMine && (
-              <Text style={[
-                styles.messageStatus,
-                item.status === 'read' && styles.messageStatusRead
-              ]}>
-                {item.status === 'sending' && '○'}
-                {item.status === 'sent' && '✓'}
-                {item.status === 'delivered' && '✓✓'}
-                {item.status === 'read' && '✓✓'}
+        <Pressable
+          onLongPress={() => handleLongPressMessage(item)}
+          delayLongPress={500}
+          style={[styles.messageContainer, isMine && styles.messageContainerMine]}
+        >
+          <View style={[
+            styles.messageBubble,
+            isMine ? styles.messageBubbleMine : styles.messageBubbleTheirs,
+            hasImage && styles.imageBubble
+          ]}>
+            {/* Forwarded Label */}
+            {item.isForwarded && (
+              <Text style={[styles.forwardedLabel, isMine && styles.forwardedLabelMine]}>
+                Forwarded
               </Text>
             )}
-          </View>
-        </View>
-
-        {/* Reactions display */}
-        {item.reactions && Object.keys(item.reactions).length > 0 && (
-          <View style={[styles.reactionsContainer, isMine && styles.reactionsContainerMine]}>
-            {Object.entries(item.reactions).map(([oderId, emoji]) => (
+            {/* Reply Quote */}
+            {hasReply && (
+              <View style={[styles.replyQuote, isMine ? styles.replyQuoteMine : styles.replyQuoteTheirs]}>
+                <Text style={[styles.replyQuoteSender, isMine && styles.replyQuoteSenderMine]}>
+                  {replySenderName}
+                </Text>
+                <Text
+                  style={[styles.replyQuoteText, isMine && styles.replyQuoteTextMine]}
+                  numberOfLines={2}
+                >
+                  {item.replyTo!.content}
+                </Text>
+              </View>
+            )}
+            {/* Image Message */}
+            {hasImage && item.image && (
+              <Image
+                source={{ uri: item.image.uri }}
+                style={[styles.messageImage, { width: imageWidth, height: imageHeight }]}
+                resizeMode="cover"
+              />
+            )}
+            {/* Voice Message */}
+            {item.voice ? (
               <TouchableOpacity
-                key={oderId}
-                style={[
-                  styles.reactionBubble,
-                  oderId === user?.whisperId && styles.reactionBubbleMine,
-                ]}
-                onPress={() => {
-                  if (oderId === user?.whisperId) {
-                    handleRemoveOwnReaction(item);
-                  }
-                }}
-                activeOpacity={oderId === user?.whisperId ? 0.6 : 1}
+                style={styles.voiceMessageContainer}
+                onPress={() => playVoice(item.id, item.voice!.uri)}
               >
-                <Text style={styles.reactionEmoji}>{emoji}</Text>
+                <View style={[styles.voicePlayButton, isMine && styles.voicePlayButtonMine]}>
+                  <Text style={styles.voicePlayButtonText}>
+                    {playingVoiceId === item.id ? '||' : '\u25B6'}
+                  </Text>
+                </View>
+                <View style={styles.voiceWaveform}>
+                  <View style={[styles.voiceWaveformBar, { height: 8 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 14 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 10 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 18 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 12 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 16 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 8 }]} />
+                  <View style={[styles.voiceWaveformBar, { height: 14 }]} />
+                </View>
+                <Text style={[styles.voiceDuration, isMine && styles.voiceDurationMine]}>
+                  {formatVoiceDurationMs(item.voice.duration)}
+                </Text>
               </TouchableOpacity>
-            ))}
+            ) : item.file ? (
+              <TouchableOpacity
+                style={[styles.fileCard, isMine ? styles.fileCardMine : styles.fileCardTheirs]}
+                onPress={() => handleOpenFile(item.file!)}
+              >
+                <Text style={styles.fileIcon}>{getFileIcon(item.file.mimeType)}</Text>
+                <View style={styles.fileInfo}>
+                  <Text
+                    style={[styles.fileName, isMine && styles.fileNameMine]}
+                    numberOfLines={1}
+                  >
+                    {item.file.name}
+                  </Text>
+                  <Text style={[styles.fileSize, isMine && styles.fileSizeMine]}>
+                    {formatFileSize(item.file.size)}
+                  </Text>
+                </View>
+                <Text style={[styles.fileOpenIcon, isMine && styles.fileOpenIconMine]}>
+                  {'\u2197'}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={[styles.messageText, isMine && styles.messageTextMine]}>
+                {item.content}
+              </Text>
+            )}
+            <View style={styles.messageFooter}>
+              <Text style={[styles.messageTime, isMine && styles.messageTimeMine]}>
+                {formatTime(item.timestamp)}
+              </Text>
+              {isMine && (
+                <Text style={[
+                  styles.messageStatus,
+                  item.status === 'read' && styles.messageStatusRead
+                ]}>
+                  {item.status === 'sending' && '○'}
+                  {item.status === 'sent' && '✓'}
+                  {item.status === 'delivered' && '✓✓'}
+                  {item.status === 'read' && '✓✓'}
+                </Text>
+              )}
+            </View>
           </View>
-        )}
-      </Pressable>
+
+          {/* Reactions display */}
+          {item.reactions && Object.keys(item.reactions).length > 0 && (
+            <View style={[styles.reactionsContainer, isMine && styles.reactionsContainerMine]}>
+              {Object.entries(item.reactions).map(([oderId, emoji]) => (
+                <TouchableOpacity
+                  key={oderId}
+                  style={[
+                    styles.reactionBubble,
+                    oderId === user?.whisperId && styles.reactionBubbleMine,
+                  ]}
+                  onPress={() => {
+                    if (oderId === user?.whisperId) {
+                      handleRemoveOwnReaction(item);
+                    }
+                  }}
+                  activeOpacity={oderId === user?.whisperId ? 0.6 : 1}
+                >
+                  <Text style={styles.reactionEmoji}>{emoji}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </Pressable>
+      </Swipeable>
     );
   };
 
@@ -2132,6 +2185,20 @@ const styles = StyleSheet.create({
   },
   blockButtonText: {
     color: '#000',
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  // Swipe to delete styles
+  swipeDeleteButton: {
+    backgroundColor: colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: moderateScale(80),
+    marginVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+  },
+  swipeDeleteText: {
+    color: colors.text,
     fontSize: fontSize.sm,
     fontWeight: '600',
   },

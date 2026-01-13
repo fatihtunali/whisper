@@ -29,6 +29,15 @@ export interface PendingMessage {
   timestamp: number;
   expiresAt: number;
   senderPublicKey?: string; // For message requests from unknown senders
+  // Media attachments - passed through encrypted
+  encryptedVoice?: string;
+  voiceDuration?: number;
+  encryptedImage?: string;
+  imageMetadata?: { width: number; height: number };
+  encryptedFile?: string;
+  fileMetadata?: { name: string; size: number; mimeType: string };
+  isForwarded?: boolean;
+  replyTo?: { messageId: string; content: string; senderId: string };
 }
 
 // Client -> Server message types
@@ -107,6 +116,15 @@ export interface SendMessageMessage {
     toWhisperId: string;
     encryptedContent: string;
     nonce: string;
+    // Media attachments - passed through encrypted
+    encryptedVoice?: string;
+    voiceDuration?: number;
+    encryptedImage?: string;
+    imageMetadata?: { width: number; height: number };
+    encryptedFile?: string;
+    fileMetadata?: { name: string; size: number; mimeType: string };
+    isForwarded?: boolean;
+    replyTo?: { messageId: string; content: string; senderId: string };
   };
 }
 
@@ -189,6 +207,7 @@ export interface CallInitiateMessage {
     toWhisperId: string;
     callId: string;
     offer: string; // SDP offer
+    isVideo?: boolean; // Video or voice call
   };
 }
 
@@ -313,6 +332,15 @@ export interface MessageReceivedMessage {
     nonce: string;
     timestamp: number;
     senderPublicKey?: string; // For message requests from unknown senders
+    // Media attachments - passed through encrypted
+    encryptedVoice?: string;
+    voiceDuration?: number;
+    encryptedImage?: string;
+    imageMetadata?: { width: number; height: number };
+    encryptedFile?: string;
+    fileMetadata?: { name: string; size: number; mimeType: string };
+    isForwarded?: boolean;
+    replyTo?: { messageId: string; content: string; senderId: string };
   };
 }
 
@@ -321,6 +349,7 @@ export interface MessageDeliveredMessage {
   payload: {
     messageId: string;
     status: 'sent' | 'delivered' | 'pending';
+    toWhisperId: string; // Recipient ID so client knows which conversation
   };
 }
 
@@ -334,6 +363,15 @@ export interface PendingMessagesMessage {
       nonce: string;
       timestamp: number;
       senderPublicKey?: string; // For message requests from unknown senders
+      // Media attachments - passed through encrypted
+      encryptedVoice?: string;
+      voiceDuration?: number;
+      encryptedImage?: string;
+      imageMetadata?: { width: number; height: number };
+      encryptedFile?: string;
+      fileMetadata?: { name: string; size: number; mimeType: string };
+      isForwarded?: boolean;
+      replyTo?: { messageId: string; content: string; senderId: string };
     }>;
     cursor: string | null;       // Current cursor (null if first page)
     nextCursor: string | null;   // Cursor to use for next page (null if no more)
@@ -346,6 +384,7 @@ export interface DeliveryStatusMessage {
   payload: {
     messageId: string;
     status: 'delivered' | 'read';
+    fromWhisperId: string; // Who sent the receipt (conversation to update)
   };
 }
 
@@ -419,6 +458,7 @@ export interface IncomingCallMessage {
     fromWhisperId: string;
     callId: string;
     offer: string; // SDP offer
+    isVideo: boolean; // Video or voice call
   };
 }
 

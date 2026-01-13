@@ -115,17 +115,15 @@ export default function CallScreen() {
     if (!incomingCallId || !contact) return;
 
     try {
-      // Get the current session to get the SDP offer
+      // Get the current session to get the stored SDP offer
       const session = callService.getCurrentSession();
-      if (session && session.callId === incomingCallId) {
-        // The session is already created with the offer in handleSignalingMessage
-        // Just need to get the SDP which was stored during call_offer handling
-        // For now, we'll use the internal call service accept mechanism
-
-        // Note: In a full implementation, the offer SDP would be passed through navigation params
-        // or stored in the call service for retrieval
+      if (session && session.callId === incomingCallId && session.remoteSdp) {
         console.log('[CallScreen] Accepting call:', incomingCallId);
-        setCallState('connected');
+        await callService.acceptCall(incomingCallId, contact.whisperId, false, session.remoteSdp);
+      } else {
+        console.error('[CallScreen] No remote SDP found for call');
+        Alert.alert('Error', 'Call data not available');
+        handleDecline();
       }
     } catch (error) {
       console.error('Failed to accept call:', error);

@@ -26,13 +26,35 @@ class MessageRouter {
     }
   }
 
+  // Media attachment type
+  private mediaAttachments?: {
+    encryptedVoice?: string;
+    voiceDuration?: number;
+    encryptedImage?: string;
+    imageMetadata?: { width: number; height: number };
+    encryptedFile?: string;
+    fileMetadata?: { name: string; size: number; mimeType: string };
+    isForwarded?: boolean;
+    replyTo?: { messageId: string; content: string; senderId: string };
+  };
+
   // Route an encrypted message to recipient
   routeMessage(
     messageId: string,
     fromWhisperId: string,
     toWhisperId: string,
     encryptedContent: string,
-    nonce: string
+    nonce: string,
+    media?: {
+      encryptedVoice?: string;
+      voiceDuration?: number;
+      encryptedImage?: string;
+      imageMetadata?: { width: number; height: number };
+      encryptedFile?: string;
+      fileMetadata?: { name: string; size: number; mimeType: string };
+      isForwarded?: boolean;
+      replyTo?: { messageId: string; content: string; senderId: string };
+    }
   ): 'delivered' | 'pending' | 'error' {
     const recipientSocket = connectionManager.getSocket(toWhisperId);
 
@@ -41,7 +63,7 @@ class MessageRouter {
     const senderPublicKey = connectionManager.getPublicKey(fromWhisperId) || undefined;
 
     if (recipientSocket) {
-      // Recipient is online - deliver immediately
+      // Recipient is online - deliver immediately with all media attachments
       const message: MessageReceivedMessage = {
         type: 'message_received',
         payload: {
@@ -51,6 +73,15 @@ class MessageRouter {
           nonce,
           timestamp: Date.now(),
           senderPublicKey, // Include sender's public key for message requests
+          // Media attachments - passed through as-is
+          ...(media?.encryptedVoice && { encryptedVoice: media.encryptedVoice }),
+          ...(media?.voiceDuration && { voiceDuration: media.voiceDuration }),
+          ...(media?.encryptedImage && { encryptedImage: media.encryptedImage }),
+          ...(media?.imageMetadata && { imageMetadata: media.imageMetadata }),
+          ...(media?.encryptedFile && { encryptedFile: media.encryptedFile }),
+          ...(media?.fileMetadata && { fileMetadata: media.fileMetadata }),
+          ...(media?.isForwarded && { isForwarded: media.isForwarded }),
+          ...(media?.replyTo && { replyTo: media.replyTo }),
         },
       };
 
@@ -60,8 +91,8 @@ class MessageRouter {
       }
     }
 
-    // Recipient is offline or delivery failed - queue the message
-    messageQueue.enqueue(messageId, fromWhisperId, toWhisperId, encryptedContent, nonce, senderPublicKey);
+    // Recipient is offline or delivery failed - queue the message with media
+    messageQueue.enqueue(messageId, fromWhisperId, toWhisperId, encryptedContent, nonce, senderPublicKey, media);
     console.log(`[MessageRouter] Queued ${messageId} for offline user ${toWhisperId}`);
 
     // Send push notification if recipient has a push token
@@ -78,7 +109,8 @@ class MessageRouter {
   notifyDeliveryStatus(
     senderWhisperId: string,
     messageId: string,
-    status: 'sent' | 'delivered' | 'pending'
+    status: 'sent' | 'delivered' | 'pending',
+    toWhisperId: string
   ): void {
     const senderSocket = connectionManager.getSocket(senderWhisperId);
     if (!senderSocket) return;
@@ -88,6 +120,7 @@ class MessageRouter {
       payload: {
         messageId,
         status,
+        toWhisperId,
       },
     };
 
@@ -112,6 +145,7 @@ class MessageRouter {
       payload: {
         messageId,
         status,
+        fromWhisperId, // Include so client knows which conversation
       },
     };
 
@@ -138,6 +172,15 @@ class MessageRouter {
           nonce: msg.nonce,
           timestamp: msg.timestamp,
           senderPublicKey: msg.senderPublicKey,
+          // Include media attachments if present
+          ...(msg.encryptedVoice && { encryptedVoice: msg.encryptedVoice }),
+          ...(msg.voiceDuration && { voiceDuration: msg.voiceDuration }),
+          ...(msg.encryptedImage && { encryptedImage: msg.encryptedImage }),
+          ...(msg.imageMetadata && { imageMetadata: msg.imageMetadata }),
+          ...(msg.encryptedFile && { encryptedFile: msg.encryptedFile }),
+          ...(msg.fileMetadata && { fileMetadata: msg.fileMetadata }),
+          ...(msg.isForwarded && { isForwarded: msg.isForwarded }),
+          ...(msg.replyTo && { replyTo: msg.replyTo }),
         })),
         cursor: null,
         nextCursor: null,

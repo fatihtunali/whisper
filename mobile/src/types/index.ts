@@ -193,6 +193,7 @@ export interface CallSession {
   isSpeakerOn: boolean;
   isCameraOn: boolean;
   isFrontCamera: boolean;
+  remoteSdp?: string; // Store remote SDP offer for incoming calls
 }
 
 // App state

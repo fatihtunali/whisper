@@ -270,9 +270,8 @@ class MessagingService {
         },
       });
 
-      // Update status to 'sent' (server received it)
-      message.status = 'sent';
-      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+      // Keep status as 'sending' - server will send delivery_status update
+      // which will change it to 'sent', 'delivered', or 'pending'
     } else {
       // Mark as failed if not connected
       message.status = 'failed';
@@ -339,9 +338,7 @@ class MessagingService {
         },
       });
 
-      // Update status to 'sent'
-      message.status = 'sent';
-      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+      // Keep status as 'sending' - server will send delivery_status update
     } else {
       message.status = 'failed';
       await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
@@ -409,9 +406,7 @@ class MessagingService {
         },
       });
 
-      // Update status to 'sent'
-      message.status = 'sent';
-      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+      // Keep status as 'sending' - server will send delivery_status update
     } else {
       message.status = 'failed';
       await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
@@ -480,9 +475,7 @@ class MessagingService {
         },
       });
 
-      // Update status to 'sent'
-      message.status = 'sent';
-      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+      // Keep status as 'sending' - server will send delivery_status update
     } else {
       message.status = 'failed';
       await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'failed');
@@ -619,9 +612,7 @@ class MessagingService {
         },
       });
 
-      // Update status to 'sent' (server received it)
-      message.status = 'sent';
-      await secureStorage.updateMessageStatus(contact.whisperId, messageId, 'sent');
+      // Keep status as 'sending' - server will send delivery_status update
     } else {
       // Mark as failed if not connected
       message.status = 'failed';
@@ -725,9 +716,7 @@ class MessagingService {
         },
       });
 
-      // Update status to 'sent'
-      message.status = 'sent';
-      await secureStorage.updateGroupMessageStatus(group.id, messageId, 'sent');
+      // Keep status as 'sending' - server will send delivery_status update
     } else {
       message.status = 'failed';
       await secureStorage.updateGroupMessageStatus(group.id, messageId, 'failed');
@@ -1022,13 +1011,21 @@ class MessagingService {
     timestamp: number;
     encryptedVoice?: string;
     voiceDuration?: number;
+    encryptedImage?: string;
+    imageMetadata?: { width: number; height: number };
     encryptedFile?: string;
     fileMetadata?: { name: string; size: number; mimeType: string };
+    isForwarded?: boolean;
+    replyTo?: { messageId: string; content: string; senderId: string };
     senderPublicKey?: string; // For message requests from unknown senders
   }): Promise<void> {
     if (!this.user) return;
 
-    const { messageId, fromWhisperId, encryptedContent, nonce, timestamp, encryptedVoice, voiceDuration, encryptedFile, fileMetadata, senderPublicKey } = payload;
+    const {
+      messageId, fromWhisperId, encryptedContent, nonce, timestamp,
+      encryptedVoice, voiceDuration, encryptedImage, imageMetadata,
+      encryptedFile, fileMetadata, isForwarded, replyTo, senderPublicKey
+    } = payload;
 
     // Get the sender's contact info
     let contact = await secureStorage.getContact(fromWhisperId);
@@ -1079,6 +1076,29 @@ class MessagingService {
       }
     }
 
+    // Handle image attachment
+    let image: ImageAttachment | undefined;
+    if (encryptedImage && imageMetadata) {
+      const decryptedImageBase64 = cryptoService.decryptBinaryData(
+        encryptedImage,
+        nonce,
+        this.user.privateKey,
+        contact.publicKey
+      );
+
+      if (decryptedImageBase64) {
+        // Save image data to a local file
+        const imageUri = await this.saveImageToFile(decryptedImageBase64, messageId);
+        if (imageUri) {
+          image = {
+            uri: imageUri,
+            width: imageMetadata.width,
+            height: imageMetadata.height,
+          };
+        }
+      }
+    }
+
     // Handle file attachment
     let file: FileAttachment | undefined;
     if (encryptedFile && fileMetadata) {
@@ -1115,9 +1135,9 @@ class MessagingService {
       content = decryptedContent || '';
     }
 
-    // For voice/file-only messages, we may have no text content
-    if (!content && !voice && !file) {
-      console.error('[MessagingService] Failed to decrypt message - no content, voice, or file');
+    // For voice/image/file-only messages, we may have no text content
+    if (!content && !voice && !image && !file) {
+      console.error('[MessagingService] Failed to decrypt message - no content, voice, image, or file');
       return;
     }
 
@@ -1130,7 +1150,10 @@ class MessagingService {
       timestamp,
       status: 'delivered',
       voice,
+      image,
       file,
+      isForwarded,
+      ...(replyTo && { replyTo }),
     };
 
     // Save to storage
@@ -1142,6 +1165,8 @@ class MessagingService {
     let displayContent = content;
     if (voice) {
       displayContent = 'Voice message';
+    } else if (image) {
+      displayContent = 'Photo';
     } else if (file) {
       displayContent = `File: ${file.name}`;
     }
@@ -1185,6 +1210,31 @@ class MessagingService {
     }
   }
 
+  // Private: Save image data to local file
+  private async saveImageToFile(base64Data: string, messageId: string): Promise<string | null> {
+    try {
+      // Dynamic import to avoid loading file system when not needed
+      const FileSystem = await import('expo-file-system/legacy');
+      const imagesDir = `${FileSystem.documentDirectory}images/`;
+
+      // Ensure directory exists
+      const dirInfo = await FileSystem.getInfoAsync(imagesDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(imagesDir, { intermediates: true });
+      }
+
+      const filePath = `${imagesDir}${messageId}.jpg`;
+      await FileSystem.writeAsStringAsync(filePath, base64Data, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      return filePath;
+    } catch (error) {
+      console.error('[MessagingService] Failed to save image file:', error);
+      return null;
+    }
+  }
+
   // Private: Save file data to local file
   private async saveFileToLocal(base64Data: string, messageId: string, fileName: string): Promise<string | null> {
     try {
@@ -1214,14 +1264,39 @@ class MessagingService {
   }
 
   // Private: Handle delivery status update
-  private handleDeliveryStatus(payload: {
+  // Server sends:
+  //   - message_delivered: { messageId, status, toWhisperId } - when server receives our message
+  //   - delivery_status: { messageId, status, fromWhisperId } - when recipient reads/delivers
+  private async handleDeliveryStatus(payload: {
     messageId: string;
     status: 'sent' | 'delivered' | 'pending' | 'read';
-  }): void {
-    const { messageId, status } = payload;
+    toWhisperId?: string;  // From message_delivered
+    fromWhisperId?: string; // From delivery_status
+  }): Promise<void> {
+    const { messageId, status, toWhisperId, fromWhisperId } = payload;
 
     // Map 'pending' to 'sent' for UI purposes
     const uiStatus = status === 'pending' ? 'sent' : status;
+
+    // Determine which conversation this belongs to
+    // message_delivered uses toWhisperId, delivery_status uses fromWhisperId
+    const conversationId = toWhisperId || fromWhisperId;
+
+    // Persist status to storage
+    if (conversationId) {
+      await secureStorage.updateMessageStatus(conversationId, messageId, uiStatus as Message['status']);
+    } else {
+      // If no conversation ID provided, try to find the message in all conversations
+      const conversations = await secureStorage.getConversations();
+      for (const conv of conversations) {
+        const messages = await secureStorage.getMessages(conv.contactId);
+        const msg = messages.find(m => m.id === messageId);
+        if (msg) {
+          await secureStorage.updateMessageStatus(conv.contactId, messageId, uiStatus as Message['status']);
+          break;
+        }
+      }
+    }
 
     this.notifyStatusHandlers(messageId, uiStatus as Message['status']);
     console.log('[MessagingService] Message', messageId, 'status:', status);
@@ -1235,6 +1310,15 @@ class MessagingService {
     nonce: string;
     timestamp: number;
     senderPublicKey?: string; // For message requests from unknown senders
+    // Media attachments - passed through from server
+    encryptedVoice?: string;
+    voiceDuration?: number;
+    encryptedImage?: string;
+    imageMetadata?: { width: number; height: number };
+    encryptedFile?: string;
+    fileMetadata?: { name: string; size: number; mimeType: string };
+    isForwarded?: boolean;
+    replyTo?: { messageId: string; content: string; senderId: string };
   }>): Promise<void> {
     console.log('[MessagingService] Processing', messages.length, 'pending messages');
 
@@ -1486,9 +1570,14 @@ class MessagingService {
       return new Promise((resolve, reject) => {
         // Wait for the existing lookup to complete
         const originalResolve = existing.resolve;
+        const originalReject = existing.reject;
         existing.resolve = (result) => {
           originalResolve(result);
           resolve(result);
+        };
+        existing.reject = (error) => {
+          originalReject(error);
+          reject(error);
         };
       });
     }

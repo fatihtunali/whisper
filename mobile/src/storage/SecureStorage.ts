@@ -234,6 +234,23 @@ class SecureStorage {
     }
   }
 
+  // Delete a single message from a conversation
+  async deleteMessage(conversationId: string, messageId: string): Promise<void> {
+    const messages = await this.getMessages(conversationId);
+    const filtered = messages.filter(m => m.id !== messageId);
+    await this.saveMessages(conversationId, filtered);
+
+    // Update conversation's lastMessage if needed
+    if (filtered.length > 0) {
+      // Get the most recent message
+      const sortedMessages = [...filtered].sort((a, b) => b.timestamp - a.timestamp);
+      await this.updateConversation(conversationId, {
+        lastMessage: sortedMessages[0],
+        updatedAt: sortedMessages[0].timestamp,
+      });
+    }
+  }
+
   // Privacy settings methods
   async getPrivacySettings(): Promise<PrivacySettings> {
     const data = await SecureStore.getItemAsync(KEYS.PRIVACY_SETTINGS);
@@ -467,6 +484,22 @@ class SecureStorage {
     if (index !== -1) {
       messages[index].status = status;
       await this.saveGroupMessages(groupId, messages);
+    }
+  }
+
+  // Delete a single message from a group
+  async deleteGroupMessage(groupId: string, messageId: string): Promise<void> {
+    const messages = await this.getGroupMessages(groupId);
+    const filtered = messages.filter(m => m.id !== messageId);
+    await this.saveGroupMessages(groupId, filtered);
+
+    // Update group conversation's lastMessage if needed
+    if (filtered.length > 0) {
+      const sortedMessages = [...filtered].sort((a, b) => b.timestamp - a.timestamp);
+      await this.updateGroupConversation(groupId, {
+        lastMessage: sortedMessages[0],
+        updatedAt: sortedMessages[0].timestamp,
+      });
     }
   }
 

@@ -303,6 +303,15 @@ export class WebSocketServer {
       toWhisperId: string;
       encryptedContent: string;
       nonce: string;
+      // Media attachments - passed through as-is
+      encryptedVoice?: string;
+      voiceDuration?: number;
+      encryptedImage?: string;
+      imageMetadata?: { width: number; height: number };
+      encryptedFile?: string;
+      fileMetadata?: { name: string; size: number; mimeType: string };
+      isForwarded?: boolean;
+      replyTo?: { messageId: string; content: string; senderId: string };
     }
   ): void {
     const client = connectionManager.getBySocket(socket);
@@ -311,7 +320,11 @@ export class WebSocketServer {
       return;
     }
 
-    const { messageId, toWhisperId, encryptedContent, nonce } = payload;
+    const {
+      messageId, toWhisperId, encryptedContent, nonce,
+      encryptedVoice, voiceDuration, encryptedImage, imageMetadata,
+      encryptedFile, fileMetadata, isForwarded, replyTo
+    } = payload;
 
     // Validate recipient Whisper ID
     if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
@@ -325,13 +338,23 @@ export class WebSocketServer {
       return;
     }
 
-    // Route the message
+    // Route the message with all media attachments
     const status = messageRouter.routeMessage(
       messageId,
       client.whisperId,
       toWhisperId,
       encryptedContent,
-      nonce
+      nonce,
+      {
+        encryptedVoice,
+        voiceDuration,
+        encryptedImage,
+        imageMetadata,
+        encryptedFile,
+        fileMetadata,
+        isForwarded,
+        replyTo,
+      }
     );
 
     // Notify sender of delivery status
@@ -340,7 +363,8 @@ export class WebSocketServer {
     messageRouter.notifyDeliveryStatus(
       client.whisperId,
       messageId,
-      status === 'delivered' ? 'delivered' : 'pending'
+      status === 'delivered' ? 'delivered' : 'pending',
+      toWhisperId
     );
   }
 
@@ -388,7 +412,7 @@ export class WebSocketServer {
       50 // Default limit
     );
 
-    // Send pending messages with pagination info
+    // Send pending messages with pagination info (including media attachments)
     const pendingMsg: ServerMessage = {
       type: 'pending_messages',
       payload: {
@@ -398,6 +422,16 @@ export class WebSocketServer {
           encryptedContent: msg.encryptedContent,
           nonce: msg.nonce,
           timestamp: msg.timestamp,
+          senderPublicKey: msg.senderPublicKey,
+          // Include media attachments if present
+          ...(msg.encryptedVoice && { encryptedVoice: msg.encryptedVoice }),
+          ...(msg.voiceDuration && { voiceDuration: msg.voiceDuration }),
+          ...(msg.encryptedImage && { encryptedImage: msg.encryptedImage }),
+          ...(msg.imageMetadata && { imageMetadata: msg.imageMetadata }),
+          ...(msg.encryptedFile && { encryptedFile: msg.encryptedFile }),
+          ...(msg.fileMetadata && { fileMetadata: msg.fileMetadata }),
+          ...(msg.isForwarded && { isForwarded: msg.isForwarded }),
+          ...(msg.replyTo && { replyTo: msg.replyTo }),
         })),
         cursor: result.cursor,
         nextCursor: result.nextCursor,
@@ -724,6 +758,7 @@ export class WebSocketServer {
       toWhisperId: string;
       callId: string;
       offer: string;
+      isVideo?: boolean;
     }
   ): void {
     const client = connectionManager.getBySocket(socket);
@@ -732,7 +767,7 @@ export class WebSocketServer {
       return;
     }
 
-    const { toWhisperId, callId, offer } = payload;
+    const { toWhisperId, callId, offer, isVideo } = payload;
 
     // Validate recipient Whisper ID
     if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
@@ -755,10 +790,11 @@ export class WebSocketServer {
           fromWhisperId: client.whisperId,
           callId,
           offer,
+          isVideo: isVideo || false,
         },
       };
       this.send(recipient.socket, incomingCallMessage);
-      console.log(`[WebSocket] Call initiated from ${client.whisperId} to ${toWhisperId}`);
+      console.log(`[WebSocket] ${isVideo ? 'Video' : 'Voice'} call initiated from ${client.whisperId} to ${toWhisperId}`);
     } else {
       // Recipient offline - send error back to caller
       this.sendError(socket, 'RECIPIENT_OFFLINE', 'Recipient is not available');

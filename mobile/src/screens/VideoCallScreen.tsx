@@ -222,12 +222,15 @@ export default function VideoCallScreen() {
 
   const handleAcceptCall = useCallback(async () => {
     try {
-      // Accept the incoming call
-      // In a real implementation, the remote SDP would be passed from navigation params
-      if (callId) {
-        // This would come from the signaling message
-        const remoteSdp = ''; // Would be passed from incoming call data
-        await callService.acceptCall(callId, contactId, true, remoteSdp);
+      // Get the current session to get the stored SDP offer
+      const session = callService.getCurrentSession();
+      if (callId && session && session.callId === callId && session.remoteSdp) {
+        console.log('[VideoCallScreen] Accepting call:', callId);
+        await callService.acceptCall(callId, contactId, true, session.remoteSdp);
+      } else {
+        console.error('[VideoCallScreen] No remote SDP found for call');
+        Alert.alert('Error', 'Call data not available');
+        navigation.goBack();
       }
     } catch (error) {
       console.error('[VideoCallScreen] Failed to accept call:', error);

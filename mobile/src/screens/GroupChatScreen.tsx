@@ -9,7 +9,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Animated,
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { RouteProp, useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -127,41 +129,90 @@ export default function GroupChatScreen() {
     return memberNames.get(whisperId) || whisperId;
   };
 
+  // Delete a single message
+  const handleDeleteMessage = useCallback(async (message: Message) => {
+    Alert.alert(
+      'Delete Message',
+      'Are you sure you want to delete this message? This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setMessages(prev => prev.filter(m => m.id !== message.id));
+            await secureStorage.deleteGroupMessage(groupId, message.id);
+          },
+        },
+      ]
+    );
+  }, [groupId]);
+
+  // Render the swipeable delete action
+  const renderRightActions = useCallback((
+    progress: Animated.AnimatedInterpolation<number>,
+    dragX: Animated.AnimatedInterpolation<number>,
+    message: Message
+  ) => {
+    const scale = dragX.interpolate({
+      inputRange: [-100, 0],
+      outputRange: [1, 0],
+      extrapolate: 'clamp',
+    });
+
+    return (
+      <TouchableOpacity
+        style={styles.swipeDeleteButton}
+        onPress={() => handleDeleteMessage(message)}
+      >
+        <Animated.Text style={[styles.swipeDeleteText, { transform: [{ scale }] }]}>
+          Delete
+        </Animated.Text>
+      </TouchableOpacity>
+    );
+  }, [handleDeleteMessage]);
+
   const renderMessage = ({ item }: { item: Message }) => {
     const isOwn = item.senderId === user?.whisperId;
     const senderName = item.senderName || getMemberName(item.senderId);
 
     return (
-      <View style={[styles.messageWrapper, isOwn && styles.messageWrapperOwn]}>
-        {!isOwn && (
-          <View style={styles.senderAvatarContainer}>
-            <View style={styles.senderAvatar}>
-              <Text style={styles.senderAvatarText}>{getInitials(senderName)}</Text>
+      <Swipeable
+        renderRightActions={(progress, dragX) => renderRightActions(progress, dragX, item)}
+        rightThreshold={40}
+        overshootRight={false}
+      >
+        <View style={[styles.messageWrapper, isOwn && styles.messageWrapperOwn]}>
+          {!isOwn && (
+            <View style={styles.senderAvatarContainer}>
+              <View style={styles.senderAvatar}>
+                <Text style={styles.senderAvatarText}>{getInitials(senderName)}</Text>
+              </View>
+            </View>
+          )}
+          <View style={[styles.messageBubble, isOwn ? styles.ownMessage : styles.otherMessage]}>
+            {!isOwn && (
+              <Text style={styles.senderName}>{senderName}</Text>
+            )}
+            <Text style={[styles.messageText, isOwn && styles.ownMessageText]}>
+              {item.content}
+            </Text>
+            <View style={styles.messageFooter}>
+              <Text style={[styles.messageTime, isOwn && styles.ownMessageTime]}>
+                {formatTime(item.timestamp)}
+              </Text>
+              {isOwn && (
+                <Text style={styles.messageStatus}>
+                  {item.status === 'sending' && '..'}
+                  {item.status === 'sent' && 'OK'}
+                  {item.status === 'delivered' && 'OK OK'}
+                  {item.status === 'failed' && '!'}
+                </Text>
+              )}
             </View>
           </View>
-        )}
-        <View style={[styles.messageBubble, isOwn ? styles.ownMessage : styles.otherMessage]}>
-          {!isOwn && (
-            <Text style={styles.senderName}>{senderName}</Text>
-          )}
-          <Text style={[styles.messageText, isOwn && styles.ownMessageText]}>
-            {item.content}
-          </Text>
-          <View style={styles.messageFooter}>
-            <Text style={[styles.messageTime, isOwn && styles.ownMessageTime]}>
-              {formatTime(item.timestamp)}
-            </Text>
-            {isOwn && (
-              <Text style={styles.messageStatus}>
-                {item.status === 'sending' && '..'}
-                {item.status === 'sent' && 'OK'}
-                {item.status === 'delivered' && 'OK OK'}
-                {item.status === 'failed' && '!'}
-              </Text>
-            )}
-          </View>
         </View>
-      </View>
+      </Swipeable>
     );
   };
 
@@ -426,5 +477,19 @@ const styles = StyleSheet.create({
     fontSize: fontSize.lg,
     color: colors.text,
     fontWeight: '700',
+  },
+  // Swipe to delete styles
+  swipeDeleteButton: {
+    backgroundColor: colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: moderateScale(80),
+    marginVertical: spacing.xs,
+    borderRadius: borderRadius.md,
+  },
+  swipeDeleteText: {
+    color: colors.text,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
   },
 });

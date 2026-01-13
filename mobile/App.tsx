@@ -1,12 +1,15 @@
 import { StatusBar } from 'expo-status-bar';
 import { View, AppState, AppStateStatus } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import React, { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { secureStorage } from './src/storage/SecureStorage';
+import { callService } from './src/services/CallService';
+import { RootStackParamList } from './src/types';
 
 // Import screens
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -39,6 +42,9 @@ function AuthNavigator() {
   );
 }
 
+// Navigation ref for navigating from outside React components
+const navigationRef = React.createRef<NavigationContainerRef<RootStackParamList>>();
+
 function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
   const { colors } = useTheme();
@@ -58,6 +64,42 @@ function RootNavigator() {
       subscription.remove();
     };
   }, []);
+
+  // Set up global incoming call handler
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const handleIncomingCall = async (callId: string, contactId: string, isVideo: boolean) => {
+      console.log('[App] Incoming call:', { callId, contactId, isVideo });
+
+      // Get contact info for the call screen
+      const contacts = await secureStorage.getContacts();
+      const contact = contacts.find(c => c.whisperId === contactId);
+
+      // Navigate to appropriate call screen with callId
+      if (navigationRef.current?.isReady()) {
+        if (isVideo) {
+          navigationRef.current.navigate('VideoCall', {
+            contactId,
+            isIncoming: true,
+            callId, // Required for accepting the call
+          });
+        } else {
+          navigationRef.current.navigate('Call', {
+            contactId,
+            isIncoming: true,
+            callId, // Required for accepting the call
+          });
+        }
+      }
+    };
+
+    callService.setIncomingCallHandler(handleIncomingCall);
+
+    return () => {
+      callService.setIncomingCallHandler(null);
+    };
+  }, [isAuthenticated]);
 
   const checkAppLock = async () => {
     if (!isAuthenticated) {
@@ -106,7 +148,7 @@ function RootNavigator() {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer ref={navigationRef}>
       {isAuthenticated ? <MainNavigator /> : <AuthNavigator />}
     </NavigationContainer>
   );
@@ -126,10 +168,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <ThemeProvider>
-        <AppContent />
-      </ThemeProvider>
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ThemeProvider>
+          <AppContent />
+        </ThemeProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

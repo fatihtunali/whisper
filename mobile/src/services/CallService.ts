@@ -131,12 +131,12 @@ class CallService {
 
       await this.peerConnection!.setLocalDescription(offer);
 
-      // Send call offer via signaling
+      // Send call offer via signaling (include isVideo flag)
       this.sendSignalingMessage(contact.whisperId, {
         type: 'call_offer',
         callId,
-        isVideo,
         sdp: offer.sdp,
+        isVideo,
       });
 
       console.log('[CallService] Outgoing call started:', callId);
@@ -407,7 +407,7 @@ class CallService {
           type: 'call_offer',
           callId: payload.callId,
           sdp: payload.offer,
-          isVideo: false, // Voice calls only for now
+          isVideo: payload.isVideo || false,
         });
         break;
       case 'call_answered':
@@ -456,7 +456,7 @@ class CallService {
           return;
         }
 
-        // Create pending session
+        // Create pending session with remote SDP stored
         this.currentSession = {
           callId: message.callId,
           contactId: fromWhisperId,
@@ -467,6 +467,7 @@ class CallService {
           isSpeakerOn: false,
           isCameraOn: message.isVideo || false,
           isFrontCamera: true,
+          remoteSdp: message.sdp, // Store the SDP offer for later use
         };
 
         this.notifyStateChange('ringing');
@@ -547,7 +548,7 @@ class CallService {
     }
 
     // Map internal message types to WebSocket message types
-    const { type, callId, sdp, candidate, ...rest } = message;
+    const { type, callId, sdp, candidate, isVideo, ...rest } = message;
 
     let wsMessage: { type: string; payload: Record<string, unknown> };
 
@@ -559,6 +560,7 @@ class CallService {
             toWhisperId,
             callId,
             offer: sdp,
+            isVideo: isVideo || false,
           },
         };
         break;

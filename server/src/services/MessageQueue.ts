@@ -14,7 +14,17 @@ class MessageQueue {
     toWhisperId: string,
     encryptedContent: string,
     nonce: string,
-    senderPublicKey?: string
+    senderPublicKey?: string,
+    media?: {
+      encryptedVoice?: string;
+      voiceDuration?: number;
+      encryptedImage?: string;
+      imageMetadata?: { width: number; height: number };
+      encryptedFile?: string;
+      fileMetadata?: { name: string; size: number; mimeType: string };
+      isForwarded?: boolean;
+      replyTo?: { messageId: string; content: string; senderId: string };
+    }
   ): void {
     const message: PendingMessage = {
       id: messageId,
@@ -25,6 +35,15 @@ class MessageQueue {
       timestamp: Date.now(),
       expiresAt: Date.now() + MESSAGE_TTL_MS,
       senderPublicKey,
+      // Include media attachments if present
+      ...(media?.encryptedVoice && { encryptedVoice: media.encryptedVoice }),
+      ...(media?.voiceDuration && { voiceDuration: media.voiceDuration }),
+      ...(media?.encryptedImage && { encryptedImage: media.encryptedImage }),
+      ...(media?.imageMetadata && { imageMetadata: media.imageMetadata }),
+      ...(media?.encryptedFile && { encryptedFile: media.encryptedFile }),
+      ...(media?.fileMetadata && { fileMetadata: media.fileMetadata }),
+      ...(media?.isForwarded && { isForwarded: media.isForwarded }),
+      ...(media?.replyTo && { replyTo: media.replyTo }),
     };
 
     const userQueue = this.queue.get(toWhisperId) || [];
