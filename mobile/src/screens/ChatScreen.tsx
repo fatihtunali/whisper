@@ -61,9 +61,8 @@ export default function ChatScreen() {
   const [isSendingFile, setIsSendingFile] = useState(false);
   // Full-screen image viewer state
   const [viewingImage, setViewingImage] = useState<{ uri: string; width: number; height: number } | null>(null);
-  // Voice recording state
-  // Note: Use audioRecorder.isRecording from the hook instead of local state
-  // const [isRecording, setIsRecording] = useState(false);
+  // Voice recording state - use local state as fallback since hook state may not update properly
+  const [isRecordingLocal, setIsRecordingLocal] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [isContactTyping, setIsContactTyping] = useState(false);
@@ -534,8 +533,9 @@ export default function ChatScreen() {
 
       // Start recording using the hook's recorder
       await audioRecorder.record();
+      setIsRecordingLocal(true);
       setRecordingDuration(0);
-      console.log('[ChatScreen] Recording started, isRecording:', audioRecorder.isRecording);
+      console.log('[ChatScreen] Recording started, isRecording:', isRecordingLocal);
 
       // Start duration timer
       recordingTimerRef.current = setInterval(() => {
@@ -550,28 +550,42 @@ export default function ChatScreen() {
   };
 
   const stopRecording = async () => {
-    if (!audioRecorder.isRecording) return;
+    console.log('[ChatScreen] stopRecording called, isRecording:', isRecordingLocal, 'local:', isRecordingLocal);
+
+    // Hide recording UI immediately
+    setIsRecordingLocal(false);
 
     try {
-      // Stop timer
+      // Stop timer first
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
         recordingTimerRef.current = null;
       }
 
-      // Stop recording
-      await audioRecorder.stop();
-      const uri = audioRecorder.uri;
+      // Capture duration before resetting
       const duration = recordingDuration * 1000; // Convert to milliseconds
-
       setRecordingDuration(0);
 
-      // Reset audio mode
-      await AudioModule.setAudioModeAsync({
-        allowsRecording: false,
-      });
+      // Stop recording - don't check isRecording, just try to stop
+      try {
+        await audioRecorder.stop();
+      } catch (stopError) {
+        console.log('[ChatScreen] Stop error (may be expected):', stopError);
+      }
 
-      if (uri && contact) {
+      const uri = audioRecorder.uri;
+      console.log('[ChatScreen] Recording URI:', uri, 'Duration:', duration);
+
+      // Reset audio mode
+      try {
+        await AudioModule.setAudioModeAsync({
+          allowsRecording: false,
+        });
+      } catch (modeError) {
+        console.log('[ChatScreen] Audio mode error:', modeError);
+      }
+
+      if (uri && contact && duration > 0) {
         await sendVoiceMessage(uri, duration);
       }
     } catch (error) {
@@ -581,23 +595,35 @@ export default function ChatScreen() {
   };
 
   const cancelRecording = async () => {
-    if (!audioRecorder.isRecording) return;
+    console.log('[ChatScreen] cancelRecording called, isRecording:', isRecordingLocal, 'local:', isRecordingLocal);
+
+    // Hide recording UI immediately
+    setIsRecordingLocal(false);
 
     try {
-      // Stop timer
+      // Stop timer first
       if (recordingTimerRef.current) {
         clearInterval(recordingTimerRef.current);
         recordingTimerRef.current = null;
       }
 
-      // Stop and discard recording
-      await audioRecorder.stop();
       setRecordingDuration(0);
 
+      // Stop recording - don't check isRecording, just try to stop
+      try {
+        await audioRecorder.stop();
+      } catch (stopError) {
+        console.log('[ChatScreen] Cancel stop error (may be expected):', stopError);
+      }
+
       // Reset audio mode
-      await AudioModule.setAudioModeAsync({
-        allowsRecording: false,
-      });
+      try {
+        await AudioModule.setAudioModeAsync({
+          allowsRecording: false,
+        });
+      } catch (modeError) {
+        console.log('[ChatScreen] Audio mode error:', modeError);
+      }
 
       console.log('Recording cancelled');
     } catch (error) {
@@ -1423,7 +1449,7 @@ export default function ChatScreen() {
                 </TouchableOpacity>
               </View>
             )}
-            {audioRecorder.isRecording ? (
+            {isRecordingLocal ? (
               <View style={styles.recordingContainer}>
                 <TouchableOpacity style={styles.cancelRecordingButton} onPress={cancelRecording}>
                   <Text style={styles.cancelRecordingText}>Cancel</Text>
