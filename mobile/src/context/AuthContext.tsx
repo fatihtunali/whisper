@@ -4,6 +4,7 @@ import { secureStorage } from '../storage/SecureStorage';
 import { cryptoService } from '../crypto/CryptoService';
 import { messagingService } from '../services/MessagingService';
 import { notificationService } from '../services/NotificationService';
+import { callService } from '../services/CallService';
 import { navigate } from '../utils/navigationRef';
 
 interface AuthContextType {
@@ -88,6 +89,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         );
 
+        // Set up global incoming call handler
+        callService.setIncomingCallHandler(async (callId, fromWhisperId, isVideo) => {
+          console.log('[AuthContext] Incoming call:', { callId, fromWhisperId, isVideo });
+
+          // Get contact name for notification
+          const contact = await secureStorage.getContact(fromWhisperId);
+          const callerName = contact?.nickname || contact?.username || fromWhisperId;
+
+          // Show notification
+          await notificationService.showIncomingCallNotification(
+            callerName,
+            callId,
+            fromWhisperId,
+            isVideo
+          );
+
+          // Navigate to call screen
+          setTimeout(() => {
+            if (isVideo) {
+              navigate('VideoCall', {
+                contactId: fromWhisperId,
+                isIncoming: true,
+                callId,
+              });
+            } else {
+              navigate('Call', {
+                contactId: fromWhisperId,
+                isIncoming: true,
+                callId,
+              });
+            }
+          }, 100);
+        });
+
         // Connect to messaging service
         console.log('[AuthContext] Connecting to messaging service...');
         messagingService.connect(user);
@@ -97,6 +132,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       return () => {
         notificationService.removeListeners();
+        callService.setIncomingCallHandler(null);
       };
     }
   }, [user]);

@@ -64,6 +64,7 @@ export default function ChatScreen() {
   // Voice recording state - use local state as fallback since hook state may not update properly
   const [isRecordingLocal, setIsRecordingLocal] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingDurationRef = useRef(0); // Track duration in ref for accurate capture
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [isContactTyping, setIsContactTyping] = useState(false);
   const [conversation, setConversation] = useState<Conversation | null>(null);
@@ -535,11 +536,13 @@ export default function ChatScreen() {
       await audioRecorder.record();
       setIsRecordingLocal(true);
       setRecordingDuration(0);
+      recordingDurationRef.current = 0;
       console.log('[ChatScreen] Recording started, isRecording:', isRecordingLocal);
 
-      // Start duration timer
+      // Start duration timer - update both state and ref
       recordingTimerRef.current = setInterval(() => {
-        setRecordingDuration(prev => prev + 1);
+        recordingDurationRef.current += 1;
+        setRecordingDuration(recordingDurationRef.current);
       }, 1000);
 
       console.log('Recording started');
@@ -562,9 +565,11 @@ export default function ChatScreen() {
         recordingTimerRef.current = null;
       }
 
-      // Capture duration before resetting
-      const duration = recordingDuration * 1000; // Convert to milliseconds
+      // Capture duration from ref (more reliable than state) before resetting
+      const duration = recordingDurationRef.current * 1000; // Convert to milliseconds
+      console.log('[ChatScreen] Captured duration from ref:', recordingDurationRef.current, 'seconds');
       setRecordingDuration(0);
+      recordingDurationRef.current = 0;
 
       // Stop recording - don't check isRecording, just try to stop
       try {
@@ -586,11 +591,19 @@ export default function ChatScreen() {
       }
 
       if (uri && contact && duration > 0) {
+        console.log('[ChatScreen] Sending voice message - URI:', uri, 'Duration:', duration);
         await sendVoiceMessage(uri, duration);
+        console.log('[ChatScreen] Voice message sent successfully');
+      } else {
+        console.log('[ChatScreen] Not sending voice - URI:', uri, 'Contact:', !!contact, 'Duration:', duration);
+        if (duration <= 0) {
+          Alert.alert('Recording too short', 'Please record for at least 1 second.');
+        }
       }
     } catch (error) {
       console.error('Failed to stop recording:', error);
       setRecordingDuration(0);
+      recordingDurationRef.current = 0;
     }
   };
 
@@ -608,6 +621,7 @@ export default function ChatScreen() {
       }
 
       setRecordingDuration(0);
+      recordingDurationRef.current = 0;
 
       // Stop recording - don't check isRecording, just try to stop
       try {
@@ -629,6 +643,7 @@ export default function ChatScreen() {
     } catch (error) {
       console.error('Failed to cancel recording:', error);
       setRecordingDuration(0);
+      recordingDurationRef.current = 0;
     }
   };
 

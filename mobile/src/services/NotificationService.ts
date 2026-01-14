@@ -48,7 +48,7 @@ class NotificationService {
       this.pushToken = tokenData.data;
       console.log('[NotificationService] Push token:', this.pushToken);
 
-      // Set up Android notification channel
+      // Set up Android notification channels
       if (Platform.OS === 'android') {
         await Notifications.setNotificationChannelAsync('messages', {
           name: 'Messages',
@@ -56,6 +56,17 @@ class NotificationService {
           vibrationPattern: [0, 250, 250, 250],
           lightColor: '#6366f1',
           sound: 'default',
+        });
+
+        // Channel for incoming calls with higher priority
+        await Notifications.setNotificationChannelAsync('calls', {
+          name: 'Incoming Calls',
+          importance: Notifications.AndroidImportance.MAX,
+          vibrationPattern: [0, 500, 250, 500, 250, 500],
+          lightColor: '#22c55e',
+          sound: 'default',
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+          bypassDnd: true,
         });
       }
 
@@ -120,6 +131,38 @@ class NotificationService {
       },
       trigger: null, // Immediately
     });
+  }
+
+  // Show incoming call notification
+  async showIncomingCallNotification(
+    callerName: string,
+    callId: string,
+    fromWhisperId: string,
+    isVideo: boolean
+  ): Promise<string> {
+    const notificationId = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: isVideo ? '📹 Incoming Video Call' : '📞 Incoming Call',
+        body: `${callerName} is calling...`,
+        data: {
+          type: 'incoming_call',
+          callId,
+          fromWhisperId,
+          isVideo,
+        },
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        sticky: true,
+      },
+      trigger: null,
+    });
+    console.log('[NotificationService] Showing incoming call notification:', notificationId);
+    return notificationId;
+  }
+
+  // Dismiss a specific notification
+  async dismissNotification(notificationId: string): Promise<void> {
+    await Notifications.dismissNotificationAsync(notificationId);
   }
 
   // Clear all notifications
