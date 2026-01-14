@@ -8,6 +8,7 @@ const KEYS = {
   MESSAGES_PREFIX: 'whisper_messages_',
   PRIVACY_SETTINGS: 'whisper_privacy_settings',
   APP_LOCK_SETTINGS: 'whisper_app_lock_settings',
+  NOTIFICATION_SETTINGS: 'whisper_notification_settings',
   GROUPS: 'whisper_groups',
   GROUP_CONVERSATIONS: 'whisper_group_conversations',
   GROUP_MESSAGES_PREFIX: 'whisper_group_messages_',
@@ -24,6 +25,35 @@ export interface AppLockSettings {
   useBiometrics: boolean;
   pinHash?: string; // SHA-256 hash of the PIN
 }
+
+export interface NotificationSettings {
+  enabled: boolean;
+  messageSound: string;
+  callRingtone: string;
+  vibrate: boolean;
+  showPreview: boolean;
+}
+
+// Available notification sounds
+export const MESSAGE_SOUNDS = [
+  { id: 'default', name: 'Default' },
+  { id: 'chime', name: 'Chime' },
+  { id: 'bell', name: 'Bell' },
+  { id: 'pop', name: 'Pop' },
+  { id: 'ding', name: 'Ding' },
+  { id: 'whistle', name: 'Whistle' },
+  { id: 'none', name: 'None (Silent)' },
+];
+
+// Available call ringtones
+export const CALL_RINGTONES = [
+  { id: 'default', name: 'Default' },
+  { id: 'classic', name: 'Classic Ring' },
+  { id: 'gentle', name: 'Gentle' },
+  { id: 'urgent', name: 'Urgent' },
+  { id: 'melody', name: 'Melody' },
+  { id: 'vibrate', name: 'Vibrate Only' },
+];
 
 class SecureStorage {
   // User methods
@@ -281,6 +311,26 @@ class SecureStorage {
 
   async setAppLockSettings(settings: AppLockSettings): Promise<void> {
     await SecureStore.setItemAsync(KEYS.APP_LOCK_SETTINGS, JSON.stringify(settings));
+  }
+
+  // Notification settings methods
+  async getNotificationSettings(): Promise<NotificationSettings> {
+    const data = await SecureStore.getItemAsync(KEYS.NOTIFICATION_SETTINGS);
+    if (!data) {
+      // Default settings
+      return {
+        enabled: true,
+        messageSound: 'default',
+        callRingtone: 'default',
+        vibrate: true,
+        showPreview: true,
+      };
+    }
+    return JSON.parse(data) as NotificationSettings;
+  }
+
+  async setNotificationSettings(settings: NotificationSettings): Promise<void> {
+    await SecureStore.setItemAsync(KEYS.NOTIFICATION_SETTINGS, JSON.stringify(settings));
   }
 
   async clearAppLockSettings(): Promise<void> {

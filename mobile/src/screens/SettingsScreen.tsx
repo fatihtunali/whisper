@@ -8,6 +8,8 @@ import {
   Alert,
   Switch,
   Platform,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -16,7 +18,14 @@ import * as LocalAuthentication from 'expo-local-authentication';
 import { RootStackParamList } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { secureStorage, PrivacySettings, AppLockSettings } from '../storage/SecureStorage';
+import {
+  secureStorage,
+  PrivacySettings,
+  AppLockSettings,
+  NotificationSettings,
+  MESSAGE_SOUNDS,
+  CALL_RINGTONES,
+} from '../storage/SecureStorage';
 import { spacing, fontSize, borderRadius, ThemeColors } from '../utils/theme';
 import { moderateScale } from '../utils/responsive';
 
@@ -36,6 +45,15 @@ export default function SettingsScreen() {
     enabled: false,
     useBiometrics: false,
   });
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettings>({
+    enabled: true,
+    messageSound: 'default',
+    callRingtone: 'default',
+    vibrate: true,
+    showPreview: true,
+  });
+  const [soundPickerVisible, setSoundPickerVisible] = useState(false);
+  const [ringtonePickerVisible, setRingtonePickerVisible] = useState(false);
   const [biometricsAvailable, setBiometricsAvailable] = useState(false);
 
   // Create dynamic styles based on current theme colors
@@ -43,6 +61,7 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     loadPrivacySettings();
+    loadNotificationSettings();
     checkBiometrics();
   }, []);
 
@@ -67,6 +86,53 @@ export default function SettingsScreen() {
   const loadPrivacySettings = async () => {
     const settings = await secureStorage.getPrivacySettings();
     setPrivacySettings(settings);
+  };
+
+  const loadNotificationSettings = async () => {
+    const settings = await secureStorage.getNotificationSettings();
+    setNotificationSettings(settings);
+  };
+
+  const handleNotificationToggle = async (value: boolean) => {
+    const newSettings = { ...notificationSettings, enabled: value };
+    setNotificationSettings(newSettings);
+    await secureStorage.setNotificationSettings(newSettings);
+  };
+
+  const handleVibrateToggle = async (value: boolean) => {
+    const newSettings = { ...notificationSettings, vibrate: value };
+    setNotificationSettings(newSettings);
+    await secureStorage.setNotificationSettings(newSettings);
+  };
+
+  const handleShowPreviewToggle = async (value: boolean) => {
+    const newSettings = { ...notificationSettings, showPreview: value };
+    setNotificationSettings(newSettings);
+    await secureStorage.setNotificationSettings(newSettings);
+  };
+
+  const handleMessageSoundSelect = async (soundId: string) => {
+    const newSettings = { ...notificationSettings, messageSound: soundId };
+    setNotificationSettings(newSettings);
+    await secureStorage.setNotificationSettings(newSettings);
+    setSoundPickerVisible(false);
+  };
+
+  const handleCallRingtoneSelect = async (ringtoneId: string) => {
+    const newSettings = { ...notificationSettings, callRingtone: ringtoneId };
+    setNotificationSettings(newSettings);
+    await secureStorage.setNotificationSettings(newSettings);
+    setRingtonePickerVisible(false);
+  };
+
+  const getMessageSoundName = () => {
+    const sound = MESSAGE_SOUNDS.find(s => s.id === notificationSettings.messageSound);
+    return sound?.name || 'Default';
+  };
+
+  const getCallRingtoneName = () => {
+    const ringtone = CALL_RINGTONES.find(r => r.id === notificationSettings.callRingtone);
+    return ringtone?.name || 'Default';
   };
 
   const handleReadReceiptsToggle = async (value: boolean) => {
@@ -336,6 +402,84 @@ export default function SettingsScreen() {
           </View>
         </View>
 
+        {/* Notifications Section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Notifications</Text>
+          <View style={styles.menuItemWithToggle}>
+            <View style={styles.menuItemContent}>
+              <Text style={styles.menuIcon}>🔔</Text>
+              <View style={styles.menuTextContainer}>
+                <Text style={styles.menuText}>Enable Notifications</Text>
+                <Text style={styles.menuDescription}>
+                  Receive message and call notifications
+                </Text>
+              </View>
+            </View>
+            <Switch
+              value={notificationSettings.enabled}
+              onValueChange={handleNotificationToggle}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor="#ffffff"
+            />
+          </View>
+          {notificationSettings.enabled && (
+            <>
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => setSoundPickerVisible(true)}
+              >
+                <Text style={styles.menuIcon}>🔊</Text>
+                <Text style={styles.menuText}>Message Sound</Text>
+                <Text style={styles.menuValue}>{getMessageSoundName()}</Text>
+                <Text style={styles.chevron}>›</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => setRingtonePickerVisible(true)}
+              >
+                <Text style={styles.menuIcon}>📞</Text>
+                <Text style={styles.menuText}>Call Ringtone</Text>
+                <Text style={styles.menuValue}>{getCallRingtoneName()}</Text>
+                <Text style={styles.chevron}>›</Text>
+              </TouchableOpacity>
+              <View style={styles.menuItemWithToggle}>
+                <View style={styles.menuItemContent}>
+                  <Text style={styles.menuIcon}>📳</Text>
+                  <View style={styles.menuTextContainer}>
+                    <Text style={styles.menuText}>Vibrate</Text>
+                    <Text style={styles.menuDescription}>
+                      Vibrate on new messages and calls
+                    </Text>
+                  </View>
+                </View>
+                <Switch
+                  value={notificationSettings.vibrate}
+                  onValueChange={handleVibrateToggle}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor="#ffffff"
+                />
+              </View>
+              <View style={styles.menuItemWithToggle}>
+                <View style={styles.menuItemContent}>
+                  <Text style={styles.menuIcon}>👁️</Text>
+                  <View style={styles.menuTextContainer}>
+                    <Text style={styles.menuText}>Show Preview</Text>
+                    <Text style={styles.menuDescription}>
+                      Show message content in notifications
+                    </Text>
+                  </View>
+                </View>
+                <Switch
+                  value={notificationSettings.showPreview}
+                  onValueChange={handleShowPreviewToggle}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor="#ffffff"
+                />
+              </View>
+            </>
+          )}
+        </View>
+
         {/* Appearance Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Appearance</Text>
@@ -414,6 +558,80 @@ export default function SettingsScreen() {
           <Text style={styles.footerSubtext}>Private. Secure. Anonymous.</Text>
         </View>
       </ScrollView>
+
+      {/* Message Sound Picker Modal */}
+      <Modal
+        visible={soundPickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSoundPickerVisible(false)}
+      >
+        <Pressable
+          style={styles.pickerOverlay}
+          onPress={() => setSoundPickerVisible(false)}
+        >
+          <View style={styles.pickerContainer}>
+            <Text style={styles.pickerTitle}>Message Sound</Text>
+            {MESSAGE_SOUNDS.map((sound) => (
+              <TouchableOpacity
+                key={sound.id}
+                style={[
+                  styles.pickerOption,
+                  notificationSettings.messageSound === sound.id && styles.pickerOptionSelected,
+                ]}
+                onPress={() => handleMessageSoundSelect(sound.id)}
+              >
+                <Text style={[
+                  styles.pickerOptionText,
+                  notificationSettings.messageSound === sound.id && styles.pickerOptionTextSelected,
+                ]}>
+                  {sound.name}
+                </Text>
+                {notificationSettings.messageSound === sound.id && (
+                  <Text style={styles.pickerCheckmark}>✓</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
+
+      {/* Call Ringtone Picker Modal */}
+      <Modal
+        visible={ringtonePickerVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setRingtonePickerVisible(false)}
+      >
+        <Pressable
+          style={styles.pickerOverlay}
+          onPress={() => setRingtonePickerVisible(false)}
+        >
+          <View style={styles.pickerContainer}>
+            <Text style={styles.pickerTitle}>Call Ringtone</Text>
+            {CALL_RINGTONES.map((ringtone) => (
+              <TouchableOpacity
+                key={ringtone.id}
+                style={[
+                  styles.pickerOption,
+                  notificationSettings.callRingtone === ringtone.id && styles.pickerOptionSelected,
+                ]}
+                onPress={() => handleCallRingtoneSelect(ringtone.id)}
+              >
+                <Text style={[
+                  styles.pickerOptionText,
+                  notificationSettings.callRingtone === ringtone.id && styles.pickerOptionTextSelected,
+                ]}>
+                  {ringtone.name}
+                </Text>
+                {notificationSettings.callRingtone === ringtone.id && (
+                  <Text style={styles.pickerCheckmark}>✓</Text>
+                )}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -559,5 +777,49 @@ const createStyles = (colors: ThemeColors) =>
       fontSize: fontSize.sm,
       color: colors.textMuted,
       marginTop: spacing.xs,
+    },
+    pickerOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0, 0, 0, 0.5)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    pickerContainer: {
+      backgroundColor: colors.surface,
+      borderRadius: borderRadius.lg,
+      padding: spacing.lg,
+      width: '80%',
+      maxWidth: 300,
+    },
+    pickerTitle: {
+      fontSize: fontSize.lg,
+      fontWeight: '600',
+      color: colors.text,
+      marginBottom: spacing.md,
+      textAlign: 'center',
+    },
+    pickerOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: spacing.md,
+      paddingHorizontal: spacing.sm,
+      borderRadius: borderRadius.sm,
+    },
+    pickerOptionSelected: {
+      backgroundColor: colors.primary + '20',
+    },
+    pickerOptionText: {
+      fontSize: fontSize.md,
+      color: colors.text,
+    },
+    pickerOptionTextSelected: {
+      color: colors.primary,
+      fontWeight: '600',
+    },
+    pickerCheckmark: {
+      fontSize: fontSize.md,
+      color: colors.primary,
+      fontWeight: '700',
     },
   });

@@ -100,9 +100,19 @@ export default function QRScannerScreen() {
           <View style={styles.headerSpacer} />
         </View>
         <View style={styles.centered}>
-          <Text style={styles.text}>Camera permission is required to scan QR codes.</Text>
+          <Text style={styles.permissionIcon}>📷</Text>
+          <Text style={styles.permissionTitle}>Camera Access</Text>
+          <Text style={styles.permissionDescription}>
+            Whisper needs camera access to scan QR codes and add contacts quickly.
+          </Text>
+          <Text style={styles.permissionNote}>
+            Without camera access, you can still add contacts manually using their Whisper ID.
+          </Text>
           <TouchableOpacity style={styles.button} onPress={requestPermission}>
-            <Text style={styles.buttonText}>Grant Permission</Text>
+            <Text style={styles.buttonText}>Continue</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryButton} onPress={navigateBack}>
+            <Text style={styles.secondaryButtonText}>Not Now</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -189,16 +199,53 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: spacing.lg,
   },
+  permissionIcon: {
+    fontSize: moderateScale(60),
+    marginBottom: spacing.lg,
+  },
+  permissionTitle: {
+    fontSize: fontSize.xl,
+    fontWeight: '700',
+    color: colors.text,
+    marginBottom: spacing.md,
+    textAlign: 'center',
+  },
+  permissionDescription: {
+    fontSize: fontSize.md,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    marginBottom: spacing.md,
+    lineHeight: moderateScale(22),
+  },
+  permissionNote: {
+    fontSize: fontSize.sm,
+    color: colors.textMuted,
+    textAlign: 'center',
+    marginBottom: spacing.xl,
+    fontStyle: 'italic',
+  },
   button: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.xl,
     borderRadius: borderRadius.md,
+    width: '100%',
+    alignItems: 'center',
   },
   buttonText: {
     color: colors.text,
     fontSize: fontSize.md,
     fontWeight: '600',
+  },
+  secondaryButton: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xl,
+    marginTop: spacing.md,
+  },
+  secondaryButtonText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.md,
+    fontWeight: '500',
   },
   cameraContainer: {
     flex: 1,
