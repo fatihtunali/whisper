@@ -48,6 +48,7 @@ export default function VideoCallScreen() {
   // Refs
   const callDurationInterval = useRef<NodeJS.Timeout | null>(null);
   const controlsTimeout = useRef<NodeJS.Timeout | null>(null);
+  const hasNavigatedAway = useRef(false);
 
   // Local video position (draggable)
   const localVideoPosition = useRef(new Animated.ValueXY({
@@ -141,7 +142,10 @@ export default function VideoCallScreen() {
         } catch (error) {
           console.error('[VideoCallScreen] Failed to start call:', error);
           Alert.alert('Error', 'Failed to start video call');
-          navigation.goBack();
+          if (!hasNavigatedAway.current) {
+            hasNavigatedAway.current = true;
+            navigation.goBack();
+          }
         }
       }
     };
@@ -193,9 +197,13 @@ export default function VideoCallScreen() {
 
   // Handle call ended
   const handleCallEnded = useCallback(() => {
+    if (hasNavigatedAway.current) return;
     setCallState('ended');
     setTimeout(() => {
-      navigation.goBack();
+      if (!hasNavigatedAway.current) {
+        hasNavigatedAway.current = true;
+        navigation.goBack();
+      }
     }, 1000);
   }, [navigation]);
 
@@ -217,8 +225,8 @@ export default function VideoCallScreen() {
 
   const handleEndCall = useCallback(() => {
     callService.endCall();
-    navigation.goBack();
-  }, [navigation]);
+    // Navigation will happen in handleCallEnded when state becomes 'ended'
+  }, []);
 
   const handleAcceptCall = useCallback(async () => {
     try {
@@ -230,16 +238,24 @@ export default function VideoCallScreen() {
       } else {
         console.error('[VideoCallScreen] No remote SDP found for call');
         Alert.alert('Error', 'Call data not available');
-        navigation.goBack();
+        if (!hasNavigatedAway.current) {
+          hasNavigatedAway.current = true;
+          navigation.goBack();
+        }
       }
     } catch (error) {
       console.error('[VideoCallScreen] Failed to accept call:', error);
       Alert.alert('Error', 'Failed to accept call');
-      navigation.goBack();
+      if (!hasNavigatedAway.current) {
+        hasNavigatedAway.current = true;
+        navigation.goBack();
+      }
     }
   }, [callId, contactId, navigation]);
 
   const handleRejectCall = useCallback(() => {
+    if (hasNavigatedAway.current) return;
+    hasNavigatedAway.current = true;
     if (callId) {
       callService.rejectCall(callId, contactId);
     }

@@ -38,6 +38,10 @@ class CallService {
   private turnCredentials: TurnCredentials | null = null;
   private turnCredentialsExpiry: number = 0;
 
+  // Cleanup state to prevent race conditions
+  private isCleaningUp: boolean = false;
+  private cleanupCompleteTime: number = 0;
+
   constructor() {
     // Set up signaling message handlers
     this.setupSignalingHandlers();
@@ -162,6 +166,18 @@ class CallService {
 
   // Start an outgoing call
   async startCall(contact: Contact, isVideo: boolean): Promise<string> {
+    // Check if cleanup is in progress or just completed
+    if (this.isCleaningUp) {
+      throw new Error('Previous call is still cleaning up');
+    }
+
+    // Wait a bit after cleanup to ensure resources are released
+    const timeSinceCleanup = Date.now() - this.cleanupCompleteTime;
+    if (this.cleanupCompleteTime > 0 && timeSinceCleanup < 500) {
+      console.log('[CallService] Waiting for cleanup to settle...');
+      await new Promise(resolve => setTimeout(resolve, 500 - timeSinceCleanup));
+    }
+
     if (this.currentSession) {
       throw new Error('Call already in progress');
     }
@@ -298,6 +314,12 @@ class CallService {
 
   // End the current call
   endCall(): void {
+    // Prevent multiple endCall invocations
+    if (this.isCleaningUp) {
+      console.log('[CallService] Already ending call, ignoring duplicate');
+      return;
+    }
+
     if (this.currentSession) {
       // Notify remote peer
       this.sendSignalingMessage(this.currentSession.contactId, {
@@ -693,22 +715,61 @@ class CallService {
 
   // Private: Cleanup resources
   private cleanup(): void {
-    // Stop local tracks
+    console.log('[CallService] Cleaning up call resources...');
+    this.isCleaningUp = true;
+
+    // Stop local tracks first
     if (this.localStream) {
-      this.localStream.getTracks().forEach(track => track.stop());
+      try {
+        const tracks = this.localStream.getTracks();
+        tracks.forEach(track => {
+          try {
+            track.stop();
+            console.log('[CallService] Stopped track:', track.kind);
+          } catch (e) {
+            console.warn('[CallService] Failed to stop track:', e);
+          }
+        });
+      } catch (e) {
+        console.warn('[CallService] Failed to get tracks:', e);
+      }
       this.localStream = null;
+    }
+
+    // Clear remote stream
+    if (this.remoteStream) {
+      try {
+        const tracks = this.remoteStream.getTracks();
+        tracks.forEach(track => {
+          try {
+            track.stop();
+          } catch (e) {
+            // Ignore errors stopping remote tracks
+          }
+        });
+      } catch (e) {
+        // Ignore
+      }
+      this.remoteStream = null;
+    }
+
+    if (this.remoteStreamHandler) {
+      this.remoteStreamHandler(null);
     }
 
     // Close peer connection
     if (this.peerConnection) {
-      this.peerConnection.close();
+      try {
+        // Remove event handlers before closing to prevent callbacks during cleanup
+        (this.peerConnection as any).onicecandidate = null;
+        (this.peerConnection as any).onconnectionstatechange = null;
+        (this.peerConnection as any).ontrack = null;
+        this.peerConnection.close();
+        console.log('[CallService] Peer connection closed');
+      } catch (e) {
+        console.warn('[CallService] Failed to close peer connection:', e);
+      }
       this.peerConnection = null;
-    }
-
-    // Clear remote stream
-    this.remoteStream = null;
-    if (this.remoteStreamHandler) {
-      this.remoteStreamHandler(null);
     }
 
     // Clear pending ICE candidates
@@ -716,6 +777,12 @@ class CallService {
 
     // Clear session
     this.currentSession = null;
+
+    // Mark cleanup as complete
+    this.isCleaningUp = false;
+    this.cleanupCompleteTime = Date.now();
+
+    console.log('[CallService] Cleanup complete');
   }
 }
 
