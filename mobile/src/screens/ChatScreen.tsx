@@ -648,15 +648,23 @@ export default function ChatScreen() {
   };
 
   const sendVoiceMessage = async (uri: string, duration: number) => {
-    if (!user || !contact) return;
+    if (!user || !contact) {
+      console.log('[ChatScreen] sendVoiceMessage - missing user or contact:', { user: !!user, contact: !!contact });
+      return;
+    }
 
     try {
+      console.log('[ChatScreen] Reading audio file from:', uri);
+
       // Read file as base64
       const base64 = await FileSystem.readAsStringAsync(uri, {
         encoding: 'base64',
       });
 
+      console.log('[ChatScreen] Audio file read, base64 length:', base64.length);
+
       // Send via messaging service
+      console.log('[ChatScreen] Sending voice message via messaging service...');
       const sentMessage = await messagingService.sendVoiceMessage(
         contact,
         base64,
@@ -664,12 +672,17 @@ export default function ChatScreen() {
         uri
       );
 
-      // Add to local state
-      setMessages(prev => [sentMessage, ...prev]);
+      console.log('[ChatScreen] Voice message returned:', sentMessage?.id, 'voice:', !!sentMessage?.voice);
 
-      console.log('Voice message sent');
+      // Add to local state
+      setMessages(prev => {
+        console.log('[ChatScreen] Adding voice message to state, current count:', prev.length);
+        return [sentMessage, ...prev];
+      });
+
+      console.log('[ChatScreen] Voice message sent and added to state');
     } catch (error) {
-      console.error('Failed to send voice message:', error);
+      console.error('[ChatScreen] Failed to send voice message:', error);
       Alert.alert('Error', 'Failed to send voice message. Please try again.');
     }
   };
