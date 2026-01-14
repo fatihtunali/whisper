@@ -11,6 +11,7 @@ interface ExpoPushMessage {
   sound?: 'default' | null;
   badge?: number;
   channelId?: string;
+  priority?: 'default' | 'normal' | 'high';
 }
 
 interface ExpoPushResponse {
@@ -45,7 +46,11 @@ class PushService {
       data,
       sound: 'default',
       channelId: 'messages', // Android channel
+      priority: 'high', // Ensure high priority for immediate delivery
     };
+
+    console.log(`[PushService] Sending notification to token: ${pushToken.substring(0, 30)}...`);
+    console.log(`[PushService] Title: "${title}", Body: "${body}"`);
 
     try {
       const response = await fetch(EXPO_PUSH_URL, {
@@ -59,11 +64,12 @@ class PushService {
       });
 
       const result = (await response.json()) as ExpoPushResponse;
+      console.log(`[PushService] Response:`, JSON.stringify(result));
 
       if (result.data && result.data[0]) {
         const pushResult = result.data[0];
         if (pushResult.status === 'ok') {
-          console.log('[PushService] Notification sent successfully');
+          console.log(`[PushService] Notification sent successfully (ID: ${pushResult.id})`);
           return true;
         } else {
           console.error('[PushService] Push failed:', pushResult.message, pushResult.details);

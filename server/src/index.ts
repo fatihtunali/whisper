@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import { WebSocketServer } from './websocket/WebSocketServer';
 import { reportService } from './services/ReportService';
 import { adminService } from './services/AdminService';
+import { connectionManager } from './websocket/ConnectionManager';
 
 // TURN server configuration
 const TURN_SECRET = process.env.TURN_SECRET || 'WhisperTurnSecretKey2024SarjMobile!';
@@ -203,7 +204,7 @@ const server = createServer(app);
 let wsServer: WebSocketServer | null = null;
 
 // Start the server
-server.listen(PORT, HOST, () => {
+server.listen(PORT, HOST, async () => {
   console.log('');
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║                    WHISPER SERVER                          ║');
@@ -222,6 +223,9 @@ server.listen(PORT, HOST, () => {
   console.log('║    GET  /admin/bans         - Get banned users             ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');
+
+  // Initialize ConnectionManager (loads push tokens from database)
+  await connectionManager.initialize();
 
   // Initialize WebSocket server after HTTP server is listening
   wsServer = new WebSocketServer(server);

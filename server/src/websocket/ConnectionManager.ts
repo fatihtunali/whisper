@@ -1,10 +1,26 @@
 import { WebSocket } from 'ws';
 import { ConnectedClient, PrivacyPrefs } from '../types';
 import { publicKeyStore } from '../services/PublicKeyStore';
+import { pushTokenStore } from '../services/PushTokenStore';
 
 class ConnectionManager {
   private clients: Map<string, ConnectedClient> = new Map();
-  private pushTokens: Map<string, string> = new Map(); // Persist push tokens even when offline
+  private pushTokens: Map<string, string> = new Map(); // In-memory cache, backed by database
+  private initialized: boolean = false;
+
+  // Initialize - load push tokens from database
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    try {
+      await pushTokenStore.initialize();
+      this.pushTokens = await pushTokenStore.getAll();
+      this.initialized = true;
+      console.log(`[ConnectionManager] Initialized with ${this.pushTokens.size} push tokens`);
+    } catch (error) {
+      console.error('[ConnectionManager] Failed to initialize:', error);
+    }
+  }
 
   // Register a new client connection
   register(
@@ -41,6 +57,10 @@ class ConnectionManager {
     // Store push token separately (persists when user goes offline)
     if (pushToken) {
       this.pushTokens.set(whisperId, pushToken);
+      // Persist to database asynchronously
+      pushTokenStore.store(whisperId, pushToken).catch(err =>
+        console.error(`[ConnectionManager] Failed to persist push token:`, err)
+      );
       console.log(`[ConnectionManager] Stored push token for ${whisperId}`);
     }
 
