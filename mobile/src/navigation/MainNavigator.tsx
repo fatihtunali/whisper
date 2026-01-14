@@ -142,16 +142,18 @@ export default function MainNavigator() {
         name="VideoCall"
         component={VideoCallScreen}
         options={{
-          presentation: 'fullScreenModal',
-          animation: 'fade',
+          presentation: 'card',
+          animation: 'slide_from_bottom',
+          gestureEnabled: false,
         }}
       />
       <Stack.Screen
         name="Call"
         component={CallScreen}
         options={{
-          presentation: 'fullScreenModal',
-          animation: 'fade',
+          presentation: 'card',
+          animation: 'slide_from_bottom',
+          gestureEnabled: false,
         }}
       />
       {/* Group screens */}

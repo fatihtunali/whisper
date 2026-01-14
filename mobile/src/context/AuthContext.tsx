@@ -4,6 +4,7 @@ import { secureStorage } from '../storage/SecureStorage';
 import { cryptoService } from '../crypto/CryptoService';
 import { messagingService } from '../services/MessagingService';
 import { notificationService } from '../services/NotificationService';
+import { navigate } from '../utils/navigationRef';
 
 interface AuthContextType {
   user: LocalUser | null;
@@ -55,7 +56,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // On notification tapped
           (response) => {
             console.log('[AuthContext] Notification tapped');
-            // Could navigate to specific chat here based on response.notification.request.content.data
+            const data = response.notification.request.content.data as any;
+
+            if (data?.type === 'incoming_call') {
+              // Navigate to call screen
+              console.log('[AuthContext] Navigating to call screen from notification:', data);
+              // Parse isVideo as it might come as string from notification data
+              const isVideo = data.isVideo === true || data.isVideo === 'true';
+
+              // Use setTimeout to ensure navigation happens after any current navigation completes
+              setTimeout(() => {
+                if (isVideo) {
+                  navigate('VideoCall', {
+                    contactId: data.fromWhisperId,
+                    isIncoming: true,
+                    callId: data.callId,
+                  });
+                } else {
+                  navigate('Call', {
+                    contactId: data.fromWhisperId,
+                    isIncoming: true,
+                    callId: data.callId,
+                  });
+                }
+              }, 100);
+            } else if (data?.type === 'new_message' && data?.fromWhisperId) {
+              // Navigate to chat with the sender
+              console.log('[AuthContext] Navigating to chat from notification:', data);
+              navigate('Chat', { contactId: data.fromWhisperId });
+            }
           }
         );
 

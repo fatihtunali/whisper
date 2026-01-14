@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { View, AppState, AppStateStatus } from 'react-native';
-import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
+import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -9,7 +9,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { secureStorage } from './src/storage/SecureStorage';
 import { callService } from './src/services/CallService';
-import { RootStackParamList } from './src/types';
+import { navigationRef, navigate } from './src/utils/navigationRef';
 
 // Import screens
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -21,7 +21,7 @@ import AppLockScreen from './src/screens/AppLockScreen';
 // Import main navigator with all screens
 import MainNavigator from './src/navigation/MainNavigator';
 
-import { AuthStackParamList } from './src/types';
+import { AuthStackParamList, RootStackParamList } from './src/types';
 
 const AuthStack = createNativeStackNavigator<AuthStackParamList>();
 
@@ -41,9 +41,6 @@ function AuthNavigator() {
     </AuthStack.Navigator>
   );
 }
-
-// Navigation ref for navigating from outside React components
-const navigationRef = React.createRef<NavigationContainerRef<RootStackParamList>>();
 
 function RootNavigator() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -77,21 +74,22 @@ function RootNavigator() {
       const contact = contacts.find(c => c.whisperId === contactId);
 
       // Navigate to appropriate call screen with callId
-      if (navigationRef.current?.isReady()) {
+      // Use setTimeout to ensure navigation happens after any current navigation completes
+      setTimeout(() => {
         if (isVideo) {
-          navigationRef.current.navigate('VideoCall', {
+          navigate('VideoCall', {
             contactId,
             isIncoming: true,
             callId, // Required for accepting the call
           });
         } else {
-          navigationRef.current.navigate('Call', {
+          navigate('Call', {
             contactId,
             isIncoming: true,
             callId, // Required for accepting the call
           });
         }
-      }
+      }, 100);
     };
 
     callService.setIncomingCallHandler(handleIncomingCall);
