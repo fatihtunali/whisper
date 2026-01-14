@@ -1,7 +1,10 @@
+// Load environment variables FIRST before any other imports
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import crypto from 'crypto';
-import dotenv from 'dotenv';
 import { WebSocketServer } from './websocket/WebSocketServer';
 import { reportService } from './services/ReportService';
 import { adminService } from './services/AdminService';
@@ -34,9 +37,6 @@ function generateTurnCredentials(userId: string): { username: string; credential
 
 // Export for use in WebSocket server
 export { generateTurnCredentials };
-
-// Load environment variables
-dotenv.config();
 
 // Admin authentication middleware
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || 'whisper-admin-key-change-in-production';
