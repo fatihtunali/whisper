@@ -11,6 +11,8 @@ interface PendingChallenge {
   challenge: string; // Base64 encoded
   expiresAt: number;
   pushToken?: string;
+  voipToken?: string;
+  platform?: string;
   prefs?: PrivacyPrefs;
 }
 
@@ -23,6 +25,8 @@ interface VerifyResult {
     publicKey: string;
     signingPublicKey: string;
     pushToken?: string;
+    voipToken?: string;
+    platform?: string;
     prefs?: PrivacyPrefs;
   };
 }
@@ -64,6 +68,8 @@ class AuthService {
       publicKey: string;
       signingPublicKey: string;
       pushToken?: string;
+      voipToken?: string;
+      platform?: string;
       prefs?: PrivacyPrefs;
     }
   ): string {
@@ -80,6 +86,8 @@ class AuthService {
       challenge,
       expiresAt: Date.now() + AuthService.CHALLENGE_EXPIRY_MS,
       pushToken: data.pushToken,
+      voipToken: data.voipToken,
+      platform: data.platform,
       prefs: data.prefs,
     };
 
@@ -137,6 +145,8 @@ class AuthService {
           publicKey: pending.publicKey,
           signingPublicKey: pending.signingPublicKey,
           pushToken: pending.pushToken,
+          voipToken: pending.voipToken,
+          platform: pending.platform,
           prefs: pending.prefs,
         },
       };
