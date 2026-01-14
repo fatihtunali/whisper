@@ -26,25 +26,32 @@ interface PendingGroupInvite {
 }
 
 class GroupStore {
-  private pool: mysql.Pool;
+  private pool: mysql.Pool | null = null;
+
+  // Lazy initialization of the pool
+  private getPool(): mysql.Pool {
+    if (!this.pool) {
+      this.pool = mysql.createPool({
+        host: process.env.DB_HOST || 'localhost',
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'whisper',
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+      console.log('[GroupStore] MySQL connection pool created');
+    }
+    return this.pool;
+  }
 
   constructor() {
-    this.pool = mysql.createPool({
-      host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || 'whisper',
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
-
-    console.log('[GroupStore] MySQL connection pool created');
+    // Pool is now lazily initialized
   }
 
   // Create a new group
   async createGroup(groupId: string, name: string, createdBy: string, members: string[]): Promise<void> {
-    const connection = await this.pool.getConnection();
+    const connection = await this.getPool().getConnection();
     const createdAt = Date.now();
 
     try {
@@ -77,7 +84,7 @@ class GroupStore {
 
   // Get a group with members
   async getGroup(groupId: string): Promise<StoredGroup | null> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT g.group_id, g.name, g.created_by, g.created_at FROM chat_groups g WHERE g.group_id = ?',
       [groupId]
     ) as any;
@@ -87,7 +94,7 @@ class GroupStore {
     const group = rows[0];
 
     // Get members
-    const [memberRows] = await this.pool.execute(
+    const [memberRows] = await this.getPool().execute(
       'SELECT whisper_id FROM group_members WHERE group_id = ?',
       [groupId]
     ) as any;
@@ -103,7 +110,7 @@ class GroupStore {
 
   // Get all groups for a user
   async getGroupsForUser(whisperId: string): Promise<StoredGroup[]> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       `SELECT g.group_id, g.name, g.created_by, g.created_at
        FROM chat_groups g
        INNER JOIN group_members gm ON g.group_id = gm.group_id
@@ -113,7 +120,7 @@ class GroupStore {
 
     const groups: StoredGroup[] = [];
     for (const row of rows) {
-      const [memberRows] = await this.pool.execute(
+      const [memberRows] = await this.getPool().execute(
         'SELECT whisper_id FROM group_members WHERE group_id = ?',
         [row.group_id]
       ) as any;
@@ -132,7 +139,7 @@ class GroupStore {
 
   // Check if group exists
   async exists(groupId: string): Promise<boolean> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT 1 FROM chat_groups WHERE group_id = ?',
       [groupId]
     ) as any;
@@ -141,7 +148,7 @@ class GroupStore {
 
   // Check if user is member
   async isMember(groupId: string, whisperId: string): Promise<boolean> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT 1 FROM group_members WHERE group_id = ? AND whisper_id = ?',
       [groupId, whisperId]
     ) as any;
@@ -150,7 +157,7 @@ class GroupStore {
 
   // Check if user is creator
   async isCreator(groupId: string, whisperId: string): Promise<boolean> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT 1 FROM chat_groups WHERE group_id = ? AND created_by = ?',
       [groupId, whisperId]
     ) as any;
@@ -159,7 +166,7 @@ class GroupStore {
 
   // Get members
   async getMembers(groupId: string): Promise<string[]> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT whisper_id FROM group_members WHERE group_id = ?',
       [groupId]
     ) as any;
@@ -174,7 +181,7 @@ class GroupStore {
     const joinedAt = Date.now();
     for (const memberId of newMembers) {
       try {
-        await this.pool.execute(
+        await this.getPool().execute(
           'INSERT IGNORE INTO group_members (group_id, whisper_id, joined_at) VALUES (?, ?, ?)',
           [groupId, memberId, joinedAt]
         );
@@ -192,12 +199,12 @@ class GroupStore {
     const isCreator = await this.isCreator(groupId, whisperId);
     if (isCreator) {
       // Delete entire group
-      await this.pool.execute('DELETE FROM chat_groups WHERE group_id = ?', [groupId]);
+      await this.getPool().execute('DELETE FROM chat_groups WHERE group_id = ?', [groupId]);
       console.log(`[GroupStore] Deleted group ${groupId} (creator left)`);
       return true;
     }
 
-    await this.pool.execute(
+    await this.getPool().execute(
       'DELETE FROM group_members WHERE group_id = ? AND whisper_id = ?',
       [groupId, whisperId]
     );
@@ -206,7 +213,7 @@ class GroupStore {
 
   // Update group name
   async updateGroupName(groupId: string, name: string): Promise<boolean> {
-    const [result] = await this.pool.execute(
+    const [result] = await this.getPool().execute(
       'UPDATE chat_groups SET name = ? WHERE group_id = ?',
       [name, groupId]
     ) as any;
@@ -215,13 +222,13 @@ class GroupStore {
 
   // Delete group
   async deleteGroup(groupId: string): Promise<void> {
-    await this.pool.execute('DELETE FROM chat_groups WHERE group_id = ?', [groupId]);
+    await this.getPool().execute('DELETE FROM chat_groups WHERE group_id = ?', [groupId]);
   }
 
   // Queue pending invite for offline user
   async queueInvite(whisperId: string, invite: PendingGroupInvite): Promise<void> {
     try {
-      await this.pool.execute(
+      await this.getPool().execute(
         `INSERT INTO pending_group_invites
          (whisper_id, group_id, name, created_by, members, created_at)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -243,14 +250,14 @@ class GroupStore {
 
   // Get and clear pending invites for user
   async getPendingInvites(whisperId: string): Promise<PendingGroupInvite[]> {
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT group_id, name, created_by, members, created_at FROM pending_group_invites WHERE whisper_id = ?',
       [whisperId]
     ) as any;
 
     if (rows.length > 0) {
       // Clear after fetching
-      await this.pool.execute('DELETE FROM pending_group_invites WHERE whisper_id = ?', [whisperId]);
+      await this.getPool().execute('DELETE FROM pending_group_invites WHERE whisper_id = ?', [whisperId]);
     }
 
     return rows.map((r: any) => ({
@@ -265,17 +272,17 @@ class GroupStore {
   // Clear all groups where user is a member (for account deletion)
   async clearUserGroups(whisperId: string): Promise<void> {
     // Get groups created by user and delete them
-    const [createdGroups] = await this.pool.execute(
+    const [createdGroups] = await this.getPool().execute(
       'SELECT group_id FROM chat_groups WHERE created_by = ?',
       [whisperId]
     ) as any;
 
     for (const row of createdGroups) {
-      await this.pool.execute('DELETE FROM chat_groups WHERE group_id = ?', [row.group_id]);
+      await this.getPool().execute('DELETE FROM chat_groups WHERE group_id = ?', [row.group_id]);
     }
 
     // Remove user from all groups they're a member of
-    await this.pool.execute(
+    await this.getPool().execute(
       'DELETE FROM group_members WHERE whisper_id = ?',
       [whisperId]
     );
@@ -285,7 +292,7 @@ class GroupStore {
 
   // Get stats
   async getStats(): Promise<{ totalGroups: number }> {
-    const [rows] = await this.pool.execute('SELECT COUNT(*) as count FROM chat_groups') as any;
+    const [rows] = await this.getPool().execute('SELECT COUNT(*) as count FROM chat_groups') as any;
     return {
       totalGroups: rows[0].count,
     };

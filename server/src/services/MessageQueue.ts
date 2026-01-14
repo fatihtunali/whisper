@@ -5,23 +5,34 @@ import { PendingMessage } from '../types';
 const MESSAGE_TTL_MS = 72 * 60 * 60 * 1000;
 
 class MessageQueue {
-  private pool: mysql.Pool;
+  private pool: mysql.Pool | null = null;
+  private cleanupIntervalSet: boolean = false;
+
+  // Lazy initialization of the pool
+  private getPool(): mysql.Pool {
+    if (!this.pool) {
+      this.pool = mysql.createPool({
+        host: process.env.DB_HOST || 'localhost',
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'whisper',
+        waitForConnections: true,
+        connectionLimit: 10,
+        queueLimit: 0,
+      });
+      console.log('[MessageQueue] MySQL connection pool created');
+
+      // Start cleanup interval only once
+      if (!this.cleanupIntervalSet) {
+        this.cleanupIntervalSet = true;
+        setInterval(() => this.cleanupExpired(), 60 * 60 * 1000); // Every hour
+      }
+    }
+    return this.pool;
+  }
 
   constructor() {
-    this.pool = mysql.createPool({
-      host: process.env.DB_HOST || 'localhost',
-      user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || '',
-      database: process.env.DB_NAME || 'whisper',
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-    });
-
-    console.log('[MessageQueue] MySQL connection pool created');
-
-    // Start cleanup interval
-    setInterval(() => this.cleanupExpired(), 60 * 60 * 1000); // Every hour
+    // Pool is now lazily initialized
   }
 
   // Add a message to the queue for an offline user
@@ -46,7 +57,7 @@ class MessageQueue {
     const timestamp = Date.now();
 
     try {
-      await this.pool.execute(
+      await this.getPool().execute(
         `INSERT INTO pending_messages (
           message_id, from_whisper_id, to_whisper_id, encrypted_content, nonce,
           sender_public_key, timestamp, encrypted_voice, voice_duration,
@@ -90,7 +101,7 @@ class MessageQueue {
   async getPending(whisperId: string): Promise<PendingMessage[]> {
     const expiryTime = Date.now() - MESSAGE_TTL_MS;
 
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       `SELECT * FROM pending_messages
        WHERE to_whisper_id = ? AND timestamp > ?
        ORDER BY timestamp ASC`,
@@ -190,7 +201,7 @@ class MessageQueue {
 
   // Remove all pending messages for a user (after delivery)
   async clearPending(whisperId: string): Promise<number> {
-    const [result] = await this.pool.execute(
+    const [result] = await this.getPool().execute(
       'DELETE FROM pending_messages WHERE to_whisper_id = ?',
       [whisperId]
     ) as any;
@@ -204,7 +215,7 @@ class MessageQueue {
 
   // Remove a specific message from the queue
   async removeMessage(toWhisperId: string, messageId: string): Promise<boolean> {
-    const [result] = await this.pool.execute(
+    const [result] = await this.getPool().execute(
       'DELETE FROM pending_messages WHERE to_whisper_id = ? AND message_id = ?',
       [toWhisperId, messageId]
     ) as any;
@@ -216,7 +227,7 @@ class MessageQueue {
   async getPendingCount(whisperId: string): Promise<number> {
     const expiryTime = Date.now() - MESSAGE_TTL_MS;
 
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT COUNT(*) as count FROM pending_messages WHERE to_whisper_id = ? AND timestamp > ?',
       [whisperId, expiryTime]
     ) as any;
@@ -228,7 +239,7 @@ class MessageQueue {
   async getTotalCount(): Promise<number> {
     const expiryTime = Date.now() - MESSAGE_TTL_MS;
 
-    const [rows] = await this.pool.execute(
+    const [rows] = await this.getPool().execute(
       'SELECT COUNT(*) as count FROM pending_messages WHERE timestamp > ?',
       [expiryTime]
     ) as any;
@@ -240,7 +251,7 @@ class MessageQueue {
   async cleanupExpired(): Promise<number> {
     const expiryTime = Date.now() - MESSAGE_TTL_MS;
 
-    const [result] = await this.pool.execute(
+    const [result] = await this.getPool().execute(
       'DELETE FROM pending_messages WHERE timestamp < ?',
       [expiryTime]
     ) as any;
@@ -256,12 +267,12 @@ class MessageQueue {
   async getStats(): Promise<{ users: number; messages: number }> {
     const expiryTime = Date.now() - MESSAGE_TTL_MS;
 
-    const [userRows] = await this.pool.execute(
+    const [userRows] = await this.getPool().execute(
       'SELECT COUNT(DISTINCT to_whisper_id) as count FROM pending_messages WHERE timestamp > ?',
       [expiryTime]
     ) as any;
 
-    const [msgRows] = await this.pool.execute(
+    const [msgRows] = await this.getPool().execute(
       'SELECT COUNT(*) as count FROM pending_messages WHERE timestamp > ?',
       [expiryTime]
     ) as any;
