@@ -121,6 +121,41 @@ Authenticated endpoints (requires `X-Admin-API-Key` header):
 Public endpoints:
 - `GET /health` - Health check
 - `GET /stats` - Server statistics
+- `GET /turn-credentials` - Get time-limited TURN credentials for WebRTC
+
+## WebRTC / TURN Server
+
+Voice and video calls use WebRTC with COTURN for NAT traversal.
+
+### TURN Server Configuration
+- **Domain**: turn.sarjmobile.com
+- **STUN/TURN Port**: 3479 (TCP/UDP)
+- **TURNS Port**: 5350 (TLS)
+- **Config File**: `/etc/turnserver-whisper.conf`
+- **Service**: `coturn-whisper.service`
+- **Auth**: Time-limited credentials using HMAC-SHA1
+- **Secret**: Set in `/home/whisper/whisper/server/.env` as `TURN_SECRET`
+
+### TURN Server Management
+```bash
+# Check status
+systemctl status coturn-whisper
+
+# Restart TURN server
+systemctl restart coturn-whisper
+
+# View logs
+tail -f /var/log/turnserver/turnserver-whisper.log
+
+# Test TURN server
+# Use https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/
+```
+
+### Call Flow
+1. Client requests TURN credentials via WebSocket (`get_turn_credentials`)
+2. Server generates time-limited credentials using HMAC-SHA1
+3. Client uses credentials with ICE servers for peer connection
+4. WebRTC signaling (offer/answer/ICE candidates) routed via WebSocket
 
 ## Deployment
 
