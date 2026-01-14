@@ -14,6 +14,7 @@ import {
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RTCView, MediaStream } from 'react-native-webrtc';
 import { RootStackParamList, Contact, CallState } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { callService } from '../services/CallService';
@@ -44,6 +45,8 @@ export default function VideoCallScreen() {
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isFrontCamera, setIsFrontCamera] = useState(true);
   const [showControls, setShowControls] = useState(true);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
 
   // Refs
   const callDurationInterval = useRef<NodeJS.Timeout | null>(null);
@@ -113,16 +116,25 @@ export default function VideoCallScreen() {
       if (state === 'ended') {
         handleCallEnded();
       }
+      // Update local stream when connected
+      if (state === 'connected' || state === 'connecting') {
+        const stream = callService.getLocalStream();
+        if (stream) {
+          setLocalStream(stream as unknown as MediaStream);
+        }
+      }
     });
 
     callService.setRemoteStreamHandler((stream) => {
-      // In a real implementation, this would update the RTCView
       console.log('[VideoCallScreen] Remote stream:', stream ? 'received' : 'cleared');
+      setRemoteStream(stream as unknown as MediaStream | null);
     });
 
     return () => {
       callService.setCallStateHandler(null);
       callService.setRemoteStreamHandler(null);
+      setLocalStream(null);
+      setRemoteStream(null);
     };
   }, []);
 
@@ -297,19 +309,27 @@ export default function VideoCallScreen() {
         activeOpacity={1}
         onPress={handleScreenTap}
       >
-        {/* Placeholder for RTCView - shows avatar when no video */}
-        <View style={styles.remoteVideoPlaceholder}>
-          <View style={styles.avatarLarge}>
-            <Text style={styles.avatarLargeText}>{getInitials(displayName)}</Text>
+        {remoteStream ? (
+          <RTCView
+            streamURL={(remoteStream as any).toURL()}
+            style={styles.remoteVideo}
+            objectFit="cover"
+            mirror={false}
+          />
+        ) : (
+          <View style={styles.remoteVideoPlaceholder}>
+            <View style={styles.avatarLarge}>
+              <Text style={styles.avatarLargeText}>{getInitials(displayName)}</Text>
+            </View>
+            {callState !== 'connected' && (
+              <Text style={styles.callingText}>{getCallStatusText()}</Text>
+            )}
           </View>
-          {callState !== 'connected' && (
-            <Text style={styles.callingText}>{getCallStatusText()}</Text>
-          )}
-        </View>
+        )}
       </TouchableOpacity>
 
       {/* Local Video Preview (Picture-in-Picture) */}
-      {isCameraOn && callState === 'connected' && (
+      {isCameraOn && (callState === 'connected' || callState === 'connecting' || callState === 'calling') && (
         <Animated.View
           style={[
             styles.localVideoContainer,
@@ -322,12 +342,21 @@ export default function VideoCallScreen() {
           ]}
           {...panResponder.panHandlers}
         >
-          {/* Placeholder for local RTCView */}
-          <View style={styles.localVideoPlaceholder}>
-            <View style={styles.avatarSmall}>
-              <Text style={styles.avatarSmallText}>You</Text>
+          {localStream ? (
+            <RTCView
+              streamURL={(localStream as any).toURL()}
+              style={styles.localVideo}
+              objectFit="cover"
+              mirror={isFrontCamera}
+              zOrder={1}
+            />
+          ) : (
+            <View style={styles.localVideoPlaceholder}>
+              <View style={styles.avatarSmall}>
+                <Text style={styles.avatarSmallText}>You</Text>
+              </View>
             </View>
-          </View>
+          )}
         </Animated.View>
       )}
 
@@ -431,6 +460,11 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     backgroundColor: '#1a1a1a',
   },
+  remoteVideo: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
   remoteVideoPlaceholder: {
     flex: 1,
     justifyContent: 'center',
@@ -470,6 +504,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 8,
+  },
+  localVideo: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
   },
   localVideoPlaceholder: {
     flex: 1,

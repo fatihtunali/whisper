@@ -462,16 +462,26 @@ class CallService {
     // Handle remote tracks
     (this.peerConnection as any).ontrack = (event: any) => {
       console.log('[CallService] Remote track received:', event.track?.kind);
+      console.log('[CallService] Event streams:', event.streams?.length || 0);
 
-      if (!this.remoteStream) {
-        this.remoteStream = new RNMediaStream() as unknown as MediaStream;
+      // Use the stream from the event directly (preferred method)
+      if (event.streams && event.streams[0]) {
+        this.remoteStream = event.streams[0] as unknown as MediaStream;
+        console.log('[CallService] Using event stream directly');
+      } else {
+        // Fallback: create stream and add track
+        if (!this.remoteStream) {
+          this.remoteStream = new RNMediaStream() as unknown as MediaStream;
+          console.log('[CallService] Created new remote stream');
+        }
+        if (event.track) {
+          (this.remoteStream as any).addTrack(event.track);
+          console.log('[CallService] Added track to remote stream');
+        }
       }
 
-      if (event.track) {
-        (this.remoteStream as any).addTrack(event.track);
-      }
-
-      if (this.remoteStreamHandler) {
+      if (this.remoteStreamHandler && this.remoteStream) {
+        console.log('[CallService] Notifying remote stream handler');
         this.remoteStreamHandler(this.remoteStream);
       }
     };
