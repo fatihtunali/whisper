@@ -8,7 +8,7 @@ import { reportService } from '../services/ReportService';
 import { authService } from '../services/AuthService';
 import { blockService } from '../services/BlockService';
 import { rateLimiter } from '../services/RateLimiter';
-import { groupService } from '../services/GroupService';
+import { groupStore } from '../services/GroupStore';
 import { generateTurnCredentials } from '../index';
 import { pushService } from '../services/PushService';
 import {
@@ -255,10 +255,10 @@ export class WebSocketServer {
     console.log(`[WebSocket] Challenge sent to ${whisperId}`);
   }
 
-  private handleRegisterProof(
+  private async handleRegisterProof(
     socket: WebSocket,
     payload: { signature: string }
-  ): void {
+  ): Promise<void> {
     const { signature } = payload;
 
     // Get socket ID
@@ -297,12 +297,29 @@ export class WebSocketServer {
     this.send(socket, ack);
 
     // Deliver any pending messages
-    const delivered = messageRouter.deliverPending(whisperId);
+    const delivered = await messageRouter.deliverPending(whisperId);
+
+    // Deliver any pending group invites
+    const pendingInvites = await groupStore.getPendingInvites(whisperId);
+    for (const invite of pendingInvites) {
+      const groupCreatedMessage: GroupCreatedMessage = {
+        type: 'group_created',
+        payload: {
+          groupId: invite.groupId,
+          name: invite.name,
+          createdBy: invite.createdBy,
+          members: invite.members,
+          createdAt: invite.createdAt,
+        },
+      };
+      this.send(socket, groupCreatedMessage);
+    }
+
     const hidden = prefs?.hideOnlineStatus ? ' [hidden]' : '';
-    console.log(`[WebSocket] Authenticated and registered ${whisperId}, delivered ${delivered} pending messages${hidden}`);
+    console.log(`[WebSocket] Authenticated and registered ${whisperId}, delivered ${delivered} pending messages, ${pendingInvites.length} group invites${hidden}`);
   }
 
-  private handleSendMessage(
+  private async handleSendMessage(
     socket: WebSocket,
     payload: {
       messageId: string;
@@ -319,7 +336,7 @@ export class WebSocketServer {
       isForwarded?: boolean;
       replyTo?: { messageId: string; content: string; senderId: string };
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register before sending messages');
@@ -345,7 +362,7 @@ export class WebSocketServer {
     }
 
     // Route the message with all media attachments
-    const status = messageRouter.routeMessage(
+    const status = await messageRouter.routeMessage(
       messageId,
       client.whisperId,
       toWhisperId,
@@ -399,10 +416,10 @@ export class WebSocketServer {
     messageRouter.forwardReceipt(client.whisperId, toWhisperId, messageId, status);
   }
 
-  private handleFetchPending(
+  private async handleFetchPending(
     socket: WebSocket,
     payload: { cursor?: string } = {}
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -412,7 +429,7 @@ export class WebSocketServer {
     const { cursor } = payload;
 
     // Get paginated pending messages
-    const result = messageQueue.getPendingPaginated(
+    const result = await messageQueue.getPendingPaginated(
       client.whisperId,
       cursor || null,
       50 // Default limit
@@ -448,7 +465,7 @@ export class WebSocketServer {
 
     // Only clear pending messages when all have been delivered (no more pages)
     if (!result.hasMore && result.messages.length > 0) {
-      messageQueue.clearPending(client.whisperId);
+      await messageQueue.clearPending(client.whisperId);
     }
 
     console.log(`[WebSocket] Sent ${result.messages.length} pending messages to ${client.whisperId}${result.hasMore ? ' (more available)' : ''}`);
@@ -677,14 +694,14 @@ export class WebSocketServer {
   }
 
   // Account deletion handler
-  private handleDeleteAccount(
+  private async handleDeleteAccount(
     socket: WebSocket,
     payload: {
       confirmation: string;
       timestamp: number;
       signature: string;
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -733,13 +750,13 @@ export class WebSocketServer {
     const whisperId = client.whisperId;
 
     // Clear pending messages for this user
-    messageQueue.clearPending(whisperId);
+    await messageQueue.clearPending(whisperId);
 
     // Clear all blocks by and against this user
     blockService.clearBlocks(whisperId);
 
     // Clear user from all groups (deletes groups they created)
-    groupService.clearUserGroups(whisperId);
+    await groupStore.clearUserGroups(whisperId);
 
     // Unregister from connection manager
     connectionManager.unregister(whisperId);
@@ -912,14 +929,14 @@ export class WebSocketServer {
   }
 
   // Group handlers
-  private handleCreateGroup(
+  private async handleCreateGroup(
     socket: WebSocket,
     payload: {
       groupId: string;
       name: string;
       members: string[];
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -947,10 +964,10 @@ export class WebSocketServer {
     }
 
     const createdAt = Date.now();
-    const allMembers = [client.whisperId, ...members];
+    const allMembers = [client.whisperId, ...members.filter(m => m !== client.whisperId)];
 
-    // Register group with GroupService for authorization tracking
-    groupService.createGroup(groupId, client.whisperId, members);
+    // Save group to MySQL
+    await groupStore.createGroup(groupId, name, client.whisperId, members);
 
     // Notify all online members about the new group
     const groupCreatedMessage: GroupCreatedMessage = {
@@ -964,18 +981,38 @@ export class WebSocketServer {
       },
     };
 
-    // Send to all members (including creator)
+    // Send to all members (including creator) - queue for offline
     for (const memberId of allMembers) {
       const member = connectionManager.get(memberId);
       if (member) {
         this.send(member.socket, groupCreatedMessage);
+      } else if (memberId !== client.whisperId) {
+        // Queue invite for offline member
+        await groupStore.queueInvite(memberId, {
+          groupId,
+          name,
+          createdBy: client.whisperId,
+          members: allMembers,
+          createdAt,
+        });
+
+        // Send push notification
+        const pushToken = connectionManager.getPushToken(memberId);
+        if (pushToken) {
+          pushService.sendNotification(
+            pushToken,
+            'Group Invite',
+            `You were added to "${name}"`,
+            { type: 'group_invite', groupId }
+          ).catch(err => console.error('[WebSocket] Group invite push failed:', err));
+        }
       }
     }
 
     console.log(`[WebSocket] Group ${groupId} created by ${client.whisperId} with ${allMembers.length} members`);
   }
 
-  private handleSendGroupMessage(
+  private async handleSendGroupMessage(
     socket: WebSocket,
     payload: {
       groupId: string;
@@ -984,7 +1021,7 @@ export class WebSocketServer {
       nonce: string;
       senderName?: string;
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -1000,14 +1037,14 @@ export class WebSocketServer {
     }
 
     // Check if group exists
-    const group = groupService.getGroup(groupId);
+    const group = await groupStore.getGroup(groupId);
     if (!group) {
       this.sendError(socket, 'GROUP_NOT_FOUND', 'Group does not exist');
       return;
     }
 
     // Check if sender is a member of the group
-    if (!groupService.isMember(groupId, client.whisperId)) {
+    if (!(await groupStore.isMember(groupId, client.whisperId))) {
       this.sendError(socket, 'UNAUTHORIZED', 'You are not a member of this group');
       return;
     }
@@ -1029,7 +1066,7 @@ export class WebSocketServer {
     };
 
     // Send only to group members (excluding sender)
-    const members = groupService.getMembers(groupId);
+    const members = await groupStore.getMembers(groupId);
     let deliveredCount = 0;
     for (const memberId of members) {
       if (memberId === client.whisperId) continue; // Skip sender
@@ -1043,7 +1080,7 @@ export class WebSocketServer {
     console.log(`[WebSocket] Group message ${messageId} sent to group ${groupId} (${deliveredCount}/${members.length - 1} members online)`);
   }
 
-  private handleUpdateGroup(
+  private async handleUpdateGroup(
     socket: WebSocket,
     payload: {
       groupId: string;
@@ -1051,7 +1088,7 @@ export class WebSocketServer {
       addMembers?: string[];
       removeMembers?: string[];
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -1067,24 +1104,29 @@ export class WebSocketServer {
     }
 
     // Check if group exists
-    const group = groupService.getGroup(groupId);
+    const group = await groupStore.getGroup(groupId);
     if (!group) {
       this.sendError(socket, 'GROUP_NOT_FOUND', 'Group does not exist');
       return;
     }
 
     // Only group creator can update the group
-    if (!groupService.isCreator(groupId, client.whisperId)) {
+    if (!(await groupStore.isCreator(groupId, client.whisperId))) {
       this.sendError(socket, 'UNAUTHORIZED', 'Only group creator can update the group');
       return;
     }
 
-    // Apply membership changes to GroupService
+    // Apply membership changes
     if (addMembers && addMembers.length > 0) {
-      groupService.addMembers(groupId, addMembers);
+      await groupStore.addMembers(groupId, addMembers);
     }
     if (removeMembers && removeMembers.length > 0) {
-      groupService.removeMembers(groupId, removeMembers);
+      for (const memberId of removeMembers) {
+        await groupStore.removeMember(groupId, memberId);
+      }
+    }
+    if (name) {
+      await groupStore.updateGroupName(groupId, name);
     }
 
     // Create update notification
@@ -1100,7 +1142,7 @@ export class WebSocketServer {
     };
 
     // Send to all current group members (including newly added)
-    const members = groupService.getMembers(groupId);
+    const members = await groupStore.getMembers(groupId);
     for (const memberId of members) {
       const member = connectionManager.get(memberId);
       if (member) {
@@ -1121,12 +1163,12 @@ export class WebSocketServer {
     console.log(`[WebSocket] Group ${groupId} updated by ${client.whisperId}`);
   }
 
-  private handleLeaveGroup(
+  private async handleLeaveGroup(
     socket: WebSocket,
     payload: {
       groupId: string;
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -1142,16 +1184,16 @@ export class WebSocketServer {
     }
 
     // Check if user is actually a member
-    if (!groupService.isMember(groupId, client.whisperId)) {
+    if (!(await groupStore.isMember(groupId, client.whisperId))) {
       this.sendError(socket, 'NOT_A_MEMBER', 'You are not a member of this group');
       return;
     }
 
     // Get current members BEFORE leaving (to notify them)
-    const members = groupService.getMembers(groupId);
+    const members = await groupStore.getMembers(groupId);
 
-    // Update group service (removes member or deletes group if creator leaves)
-    groupService.memberLeft(groupId, client.whisperId);
+    // Remove member or delete group if creator leaves
+    await groupStore.removeMember(groupId, client.whisperId);
 
     // Notify all group members about member leaving
     const memberLeftMessage: MemberLeftGroupMessage = {
@@ -1251,17 +1293,17 @@ export class WebSocketServer {
 
   private startCleanupInterval(): void {
     // Run cleanup every minute
-    this.cleanupInterval = setInterval(() => {
+    this.cleanupInterval = setInterval(async () => {
       connectionManager.cleanupStale();
-      messageQueue.cleanupExpired();
+      await messageQueue.cleanupExpired();
     }, 60 * 1000);
   }
 
   // Get server statistics
-  getStats(): { connections: number; pendingMessages: { users: number; messages: number } } {
+  async getStats(): Promise<{ connections: number; pendingMessages: { users: number; messages: number } }> {
     return {
       connections: connectionManager.getCount(),
-      pendingMessages: messageQueue.getStats(),
+      pendingMessages: await messageQueue.getStats(),
     };
   }
 

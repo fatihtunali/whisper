@@ -66,8 +66,8 @@ app.get('/health', (_req, res) => {
 });
 
 // Stats endpoint
-app.get('/stats', (_req, res) => {
-  const stats = wsServer?.getStats() || { connections: 0, pendingMessages: { users: 0, messages: 0 } };
+app.get('/stats', async (_req, res) => {
+  const stats = wsServer ? await wsServer.getStats() : { connections: 0, pendingMessages: { users: 0, messages: 0 } };
   res.json({
     ...stats,
     timestamp: new Date().toISOString(),

@@ -26,20 +26,8 @@ class MessageRouter {
     }
   }
 
-  // Media attachment type
-  private mediaAttachments?: {
-    encryptedVoice?: string;
-    voiceDuration?: number;
-    encryptedImage?: string;
-    imageMetadata?: { width: number; height: number };
-    encryptedFile?: string;
-    fileMetadata?: { name: string; size: number; mimeType: string };
-    isForwarded?: boolean;
-    replyTo?: { messageId: string; content: string; senderId: string };
-  };
-
   // Route an encrypted message to recipient
-  routeMessage(
+  async routeMessage(
     messageId: string,
     fromWhisperId: string,
     toWhisperId: string,
@@ -55,11 +43,10 @@ class MessageRouter {
       isForwarded?: boolean;
       replyTo?: { messageId: string; content: string; senderId: string };
     }
-  ): 'delivered' | 'pending' | 'error' {
+  ): Promise<'delivered' | 'pending' | 'error'> {
     const recipientSocket = connectionManager.getSocket(toWhisperId);
 
     // Get sender's public key for recipients who don't have sender in contacts
-    // Use getPublicKey which falls back to persistent store when sender is offline
     const senderPublicKey = connectionManager.getPublicKey(fromWhisperId) || undefined;
 
     if (recipientSocket) {
@@ -72,7 +59,7 @@ class MessageRouter {
           encryptedContent,
           nonce,
           timestamp: Date.now(),
-          senderPublicKey, // Include sender's public key for message requests
+          senderPublicKey,
           // Media attachments - passed through as-is
           ...(media?.encryptedVoice && { encryptedVoice: media.encryptedVoice }),
           ...(media?.voiceDuration && { voiceDuration: media.voiceDuration }),
@@ -100,7 +87,7 @@ class MessageRouter {
     }
 
     // Recipient is offline or delivery failed - queue the message with media
-    messageQueue.enqueue(messageId, fromWhisperId, toWhisperId, encryptedContent, nonce, senderPublicKey, media);
+    await messageQueue.enqueue(messageId, fromWhisperId, toWhisperId, encryptedContent, nonce, senderPublicKey, media);
     console.log(`[MessageRouter] Queued ${messageId} for offline user ${toWhisperId}`);
 
     // Send push notification if recipient has a push token
@@ -153,7 +140,7 @@ class MessageRouter {
       payload: {
         messageId,
         status,
-        fromWhisperId, // Include so client knows which conversation
+        fromWhisperId,
       },
     };
 
@@ -163,11 +150,11 @@ class MessageRouter {
   }
 
   // Deliver pending messages when user comes online
-  deliverPending(whisperId: string): number {
+  async deliverPending(whisperId: string): Promise<number> {
     const socket = connectionManager.getSocket(whisperId);
     if (!socket) return 0;
 
-    const pending = messageQueue.getPending(whisperId);
+    const pending = await messageQueue.getPending(whisperId);
     if (pending.length === 0) return 0;
 
     const message: PendingMessagesMessage = {
@@ -198,7 +185,7 @@ class MessageRouter {
 
     if (this.send(socket, message)) {
       console.log(`[MessageRouter] Delivered ${pending.length} pending messages to ${whisperId}`);
-      messageQueue.clearPending(whisperId);
+      await messageQueue.clearPending(whisperId);
       return pending.length;
     }
 
