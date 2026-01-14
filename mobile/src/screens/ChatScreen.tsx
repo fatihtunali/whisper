@@ -59,6 +59,8 @@ export default function ChatScreen() {
   const [isSendingImage, setIsSendingImage] = useState(false);
   const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
   const [isSendingFile, setIsSendingFile] = useState(false);
+  // Full-screen image viewer state
+  const [viewingImage, setViewingImage] = useState<{ uri: string; width: number; height: number } | null>(null);
   // Voice recording state
   // Note: Use audioRecorder.isRecording from the hook instead of local state
   // const [isRecording, setIsRecording] = useState(false);
@@ -1161,11 +1163,20 @@ export default function ChatScreen() {
             )}
             {/* Image Message */}
             {hasImage && item.image && (
-              <Image
-                source={{ uri: item.image.uri }}
-                style={[styles.messageImage, { width: imageWidth, height: imageHeight }]}
-                resizeMode="cover"
-              />
+              <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => setViewingImage({
+                  uri: item.image!.uri,
+                  width: item.image!.width,
+                  height: item.image!.height,
+                })}
+              >
+                <Image
+                  source={{ uri: item.image.uri }}
+                  style={[styles.messageImage, { width: imageWidth, height: imageHeight }]}
+                  resizeMode="cover"
+                />
+              </TouchableOpacity>
             )}
             {/* Voice Message */}
             {item.voice ? (
@@ -1556,6 +1567,47 @@ export default function ChatScreen() {
             </View>
           </View>
         </Pressable>
+      </Modal>
+
+      {/* Full-Screen Image Viewer Modal */}
+      <Modal
+        visible={!!viewingImage}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setViewingImage(null)}
+      >
+        <View style={styles.imageViewerContainer}>
+          <TouchableOpacity
+            style={styles.imageViewerClose}
+            onPress={() => setViewingImage(null)}
+          >
+            <Text style={styles.imageViewerCloseText}>✕</Text>
+          </TouchableOpacity>
+          {viewingImage && (
+            <Image
+              source={{ uri: viewingImage.uri }}
+              style={styles.imageViewerImage}
+              resizeMode="contain"
+            />
+          )}
+          <TouchableOpacity
+            style={styles.imageViewerShareButton}
+            onPress={async () => {
+              if (viewingImage) {
+                try {
+                  const isAvailable = await Sharing.isAvailableAsync();
+                  if (isAvailable) {
+                    await Sharing.shareAsync(viewingImage.uri);
+                  }
+                } catch (e) {
+                  console.error('Failed to share image:', e);
+                }
+              }
+            }}
+          >
+            <Text style={styles.imageViewerShareText}>Share</Text>
+          </TouchableOpacity>
+        </View>
       </Modal>
     </View>
   );
@@ -2200,6 +2252,47 @@ const styles = StyleSheet.create({
   swipeDeleteText: {
     color: colors.text,
     fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  // Image viewer modal styles
+  imageViewerContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageViewerClose: {
+    position: 'absolute',
+    top: spacing.xl + 20,
+    right: spacing.lg,
+    zIndex: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageViewerCloseText: {
+    color: colors.text,
+    fontSize: fontSize.xl,
+    fontWeight: '600',
+  },
+  imageViewerImage: {
+    width: '100%',
+    height: '80%',
+  },
+  imageViewerShareButton: {
+    position: 'absolute',
+    bottom: spacing.xl + 20,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.primary,
+    borderRadius: borderRadius.md,
+  },
+  imageViewerShareText: {
+    color: colors.text,
+    fontSize: fontSize.md,
     fontWeight: '600',
   },
 });
