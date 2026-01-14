@@ -198,10 +198,12 @@ export class WebSocketServer {
       publicKey: string;
       signingPublicKey: string;
       pushToken?: string;
+      voipToken?: string;
+      platform?: string;
       prefs?: { sendReadReceipts: boolean; sendTypingIndicator: boolean; hideOnlineStatus: boolean };
     }
   ): void {
-    const { whisperId, publicKey, signingPublicKey, pushToken, prefs } = payload;
+    const { whisperId, publicKey, signingPublicKey, pushToken, voipToken, platform, prefs } = payload;
 
     // Get socket ID
     const socketId = this.socketIds.get(socket);
@@ -242,6 +244,8 @@ export class WebSocketServer {
       publicKey,
       signingPublicKey,
       pushToken,
+      voipToken,
+      platform,
       prefs,
     });
 
@@ -285,9 +289,9 @@ export class WebSocketServer {
     }
 
     // Authentication successful - register the client
-    const { whisperId, publicKey, signingPublicKey, pushToken, prefs } = result.data;
+    const { whisperId, publicKey, signingPublicKey, pushToken, voipToken, platform, prefs } = result.data;
 
-    connectionManager.register(whisperId, publicKey, signingPublicKey, socket, pushToken, prefs);
+    connectionManager.register(whisperId, publicKey, signingPublicKey, socket, pushToken, prefs, voipToken, platform);
 
     // Send acknowledgment
     const ack: RegisterAckMessage = {
@@ -775,22 +779,23 @@ export class WebSocketServer {
   }
 
   // Call signaling handlers
-  private handleCallInitiate(
+  private async handleCallInitiate(
     socket: WebSocket,
     payload: {
       toWhisperId: string;
       callId: string;
       offer: string;
       isVideo?: boolean;
+      callerName?: string;
     }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
       return;
     }
 
-    const { toWhisperId, callId, offer, isVideo } = payload;
+    const { toWhisperId, callId, offer, isVideo, callerName } = payload;
 
     // Validate recipient Whisper ID
     if (!toWhisperId || !/^WSP-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(toWhisperId)) {
@@ -830,7 +835,38 @@ export class WebSocketServer {
 
       console.log(`[WebSocket] ${isVideo ? 'Video' : 'Voice'} call initiated from ${client.whisperId} to ${toWhisperId}`);
     } else {
-      // Recipient offline - send error back to caller
+      // Recipient offline - try VoIP push for iOS to ring the phone
+      const voipToken = connectionManager.getVoIPToken(toWhisperId);
+      const pushToken = connectionManager.getPushToken(toWhisperId);
+
+      if (voipToken) {
+        // Send VoIP push to make iOS phone ring
+        const voipSent = await pushService.sendVoIPPush(
+          voipToken,
+          client.whisperId,
+          callId,
+          isVideo || false,
+          callerName
+        );
+        if (voipSent) {
+          console.log(`[WebSocket] VoIP push sent to offline user ${toWhisperId}`);
+          // Don't send error - the phone might still ring
+          return;
+        }
+      }
+
+      // Fallback to regular push notification
+      if (pushToken) {
+        await pushService.sendCallNotification(
+          pushToken,
+          client.whisperId,
+          callId,
+          isVideo || false
+        );
+        console.log(`[WebSocket] Push notification sent to offline user ${toWhisperId}`);
+      }
+
+      // Send error - recipient is truly offline
       this.sendError(socket, 'RECIPIENT_OFFLINE', 'Recipient is not available');
     }
   }

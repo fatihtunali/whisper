@@ -6,6 +6,7 @@ import { pushTokenStore } from '../services/PushTokenStore';
 class ConnectionManager {
   private clients: Map<string, ConnectedClient> = new Map();
   private pushTokens: Map<string, string> = new Map(); // In-memory cache, backed by database
+  private voipTokens: Map<string, string> = new Map(); // VoIP tokens for iOS
   private initialized: boolean = false;
 
   // Initialize - load push tokens from database
@@ -15,8 +16,9 @@ class ConnectionManager {
     try {
       await pushTokenStore.initialize();
       this.pushTokens = await pushTokenStore.getAll();
+      this.voipTokens = await pushTokenStore.getAllVoIPTokens();
       this.initialized = true;
-      console.log(`[ConnectionManager] Initialized with ${this.pushTokens.size} push tokens`);
+      console.log(`[ConnectionManager] Initialized with ${this.pushTokens.size} push tokens, ${this.voipTokens.size} VoIP tokens`);
     } catch (error) {
       console.error('[ConnectionManager] Failed to initialize:', error);
     }
@@ -29,7 +31,9 @@ class ConnectionManager {
     signingPublicKey: string,
     socket: WebSocket,
     pushToken?: string,
-    prefs?: PrivacyPrefs
+    prefs?: PrivacyPrefs,
+    voipToken?: string,
+    platform?: string
   ): void {
     // If client already connected, close old connection
     const existing = this.clients.get(whisperId);
@@ -58,10 +62,20 @@ class ConnectionManager {
     if (pushToken) {
       this.pushTokens.set(whisperId, pushToken);
       // Persist to database asynchronously
-      pushTokenStore.store(whisperId, pushToken).catch(err =>
+      pushTokenStore.store(whisperId, pushToken, platform || 'unknown').catch(err =>
         console.error(`[ConnectionManager] Failed to persist push token:`, err)
       );
       console.log(`[ConnectionManager] Stored push token for ${whisperId}`);
+    }
+
+    // Store VoIP token for iOS (used for incoming call notifications)
+    if (voipToken) {
+      this.voipTokens.set(whisperId, voipToken);
+      // Persist to database asynchronously
+      pushTokenStore.storeVoIPToken(whisperId, voipToken).catch(err =>
+        console.error(`[ConnectionManager] Failed to persist VoIP token:`, err)
+      );
+      console.log(`[ConnectionManager] Stored VoIP token for ${whisperId}`);
     }
 
     const hidden = prefs?.hideOnlineStatus ? ' [hidden]' : '';
@@ -154,6 +168,11 @@ class ConnectionManager {
   // Get push token for a user (even if offline)
   getPushToken(whisperId: string): string | null {
     return this.pushTokens.get(whisperId) || null;
+  }
+
+  // Get VoIP token for a user (iOS only, for incoming calls)
+  getVoIPToken(whisperId: string): string | null {
+    return this.voipTokens.get(whisperId) || null;
   }
 
   // Get public key for a user (works even when offline)

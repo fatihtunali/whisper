@@ -29,11 +29,22 @@ class PushTokenStore {
         CREATE TABLE IF NOT EXISTS push_tokens (
           whisper_id VARCHAR(20) PRIMARY KEY,
           push_token VARCHAR(255) NOT NULL,
+          voip_token VARCHAR(255) DEFAULT NULL,
           platform VARCHAR(20) DEFAULT 'unknown',
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
       `);
+
+      // Add voip_token column if it doesn't exist (for existing tables)
+      try {
+        await this.pool.execute(`
+          ALTER TABLE push_tokens ADD COLUMN IF NOT EXISTS voip_token VARCHAR(255) DEFAULT NULL
+        `);
+      } catch (e) {
+        // Column might already exist, ignore error
+      }
+
       this.initialized = true;
       console.log('[PushTokenStore] Table initialized');
     } catch (error) {
@@ -110,6 +121,54 @@ class PushTokenStore {
       console.error('[PushTokenStore] Failed to check existence:', error);
       return false;
     }
+  }
+
+  // Store or update a VoIP token (iOS only)
+  async storeVoIPToken(whisperId: string, voipToken: string): Promise<void> {
+    try {
+      await this.pool.execute(
+        `UPDATE push_tokens SET voip_token = ?, updated_at = CURRENT_TIMESTAMP WHERE whisper_id = ?`,
+        [voipToken, whisperId]
+      );
+      console.log(`[PushTokenStore] Stored VoIP token for ${whisperId}`);
+    } catch (error) {
+      console.error('[PushTokenStore] Failed to store VoIP token:', error);
+    }
+  }
+
+  // Get VoIP token for a user
+  async getVoIPToken(whisperId: string): Promise<string | null> {
+    try {
+      const [rows] = await this.pool.execute(
+        'SELECT voip_token FROM push_tokens WHERE whisper_id = ?',
+        [whisperId]
+      );
+      const results = rows as Array<{ voip_token: string | null }>;
+      return results.length > 0 ? results[0].voip_token : null;
+    } catch (error) {
+      console.error('[PushTokenStore] Failed to get VoIP token:', error);
+      return null;
+    }
+  }
+
+  // Get all VoIP tokens (for loading into memory on startup)
+  async getAllVoIPTokens(): Promise<Map<string, string>> {
+    const tokens = new Map<string, string>();
+    try {
+      const [rows] = await this.pool.execute(
+        'SELECT whisper_id, voip_token FROM push_tokens WHERE voip_token IS NOT NULL'
+      );
+      const results = rows as Array<{ whisper_id: string; voip_token: string }>;
+      for (const row of results) {
+        if (row.voip_token) {
+          tokens.set(row.whisper_id, row.voip_token);
+        }
+      }
+      console.log(`[PushTokenStore] Loaded ${tokens.size} VoIP tokens from database`);
+    } catch (error) {
+      console.error('[PushTokenStore] Failed to load VoIP tokens:', error);
+    }
+    return tokens;
   }
 
   // Get count of stored tokens

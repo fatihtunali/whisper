@@ -26,6 +26,8 @@ class MessagingService {
   private ws: WebSocket | null = null;
   private user: LocalUser | null = null;
   private pushToken: string | null = null;
+  private voipToken: string | null = null;
+  private platform: string = 'unknown';
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
   private isConnecting = false;
@@ -155,6 +157,18 @@ class MessagingService {
   setPushToken(token: string | null): void {
     this.pushToken = token;
     console.log('[MessagingService] Push token set:', token ? 'yes' : 'no');
+  }
+
+  // Set VoIP token for iOS (call before connect)
+  setVoIPToken(token: string | null): void {
+    this.voipToken = token;
+    console.log('[MessagingService] VoIP token set:', token ? 'yes' : 'no');
+  }
+
+  // Set platform (call before connect)
+  setPlatform(platform: 'ios' | 'android' | 'unknown'): void {
+    this.platform = platform;
+    console.log('[MessagingService] Platform set:', platform);
   }
 
   // Connect to WebSocket server
@@ -830,6 +844,8 @@ class MessagingService {
         publicKey: this.user.publicKey,
         signingPublicKey: this.user.signingPublicKey,
         pushToken: this.pushToken || undefined,
+        voipToken: this.voipToken || undefined,
+        platform: this.platform,
         prefs,
       },
     });

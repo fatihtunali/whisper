@@ -1,6 +1,9 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
+import { callKeepService } from './CallKeepService';
+import { voipPushService } from './VoIPPushService';
+import { messagingService } from './MessagingService';
 
 // Configure how notifications are handled when app is in foreground
 Notifications.setNotificationHandler({
@@ -15,8 +18,12 @@ Notifications.setNotificationHandler({
 
 class NotificationService {
   private pushToken: string | null = null;
+  private voipToken: string | null = null;
   private notificationListener: Notifications.Subscription | null = null;
   private responseListener: Notifications.Subscription | null = null;
+
+  // Callback for incoming calls (for navigation)
+  public onIncomingCall: ((callId: string, fromWhisperId: string, isVideo: boolean, callerName: string) => void) | null = null;
 
   // Initialize notifications and get push token
   async initialize(): Promise<string | null> {
@@ -70,11 +77,68 @@ class NotificationService {
         });
       }
 
+      // Initialize CallKeep for native call UI
+      await callKeepService.initialize();
+
+      // Set platform on messaging service
+      messagingService.setPlatform(Platform.OS as 'ios' | 'android' | 'unknown');
+
+      // Initialize VoIP push for iOS
+      if (Platform.OS === 'ios') {
+        await voipPushService.initialize();
+
+        // Handle VoIP push received
+        voipPushService.onNotification = (notification) => {
+          this.handleVoIPPush(notification);
+        };
+
+        // Store VoIP token when received and notify messaging service
+        voipPushService.onTokenReceived = (token) => {
+          this.voipToken = token;
+          messagingService.setVoIPToken(token);
+          console.log('[NotificationService] VoIP token received');
+        };
+
+        // Also check if token is already available
+        const existingVoIPToken = voipPushService.getToken();
+        if (existingVoIPToken) {
+          this.voipToken = existingVoIPToken;
+          messagingService.setVoIPToken(existingVoIPToken);
+        }
+      }
+
       return this.pushToken;
     } catch (error) {
       console.error('[NotificationService] Error initializing:', error);
       return null;
     }
+  }
+
+  // Handle VoIP push notification (iOS)
+  private handleVoIPPush(notification: any): void {
+    console.log('[NotificationService] Handling VoIP push:', notification);
+
+    const { callId, fromWhisperId, callerName, isVideo } = notification;
+
+    if (callId && fromWhisperId) {
+      // Display native call UI
+      callKeepService.displayIncomingCall(
+        callId,
+        callerName || 'Unknown Caller',
+        fromWhisperId,
+        isVideo || false
+      );
+
+      // Notify app about incoming call
+      if (this.onIncomingCall) {
+        this.onIncomingCall(callId, fromWhisperId, isVideo || false, callerName || 'Unknown');
+      }
+    }
+  }
+
+  // Get VoIP token (iOS only)
+  getVoIPToken(): string | null {
+    return this.voipToken;
   }
 
   // Get the current push token
@@ -133,16 +197,29 @@ class NotificationService {
     });
   }
 
-  // Show incoming call notification
+  // Show incoming call notification with native call UI
   async showIncomingCallNotification(
     callerName: string,
     callId: string,
     fromWhisperId: string,
     isVideo: boolean
   ): Promise<string> {
+    // Use CallKeep for native call UI (works even when app is backgrounded)
+    if (callKeepService.isAvailable()) {
+      await callKeepService.displayIncomingCall(
+        callId,
+        callerName,
+        fromWhisperId,
+        isVideo
+      );
+      console.log('[NotificationService] Displayed native call UI via CallKeep');
+      return callId;
+    }
+
+    // Fallback to regular notification if CallKeep isn't available
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
-        title: isVideo ? '📹 Incoming Video Call' : '📞 Incoming Call',
+        title: isVideo ? 'Incoming Video Call' : 'Incoming Call',
         body: `${callerName} is calling...`,
         data: {
           type: 'incoming_call',
@@ -158,6 +235,20 @@ class NotificationService {
     });
     console.log('[NotificationService] Showing incoming call notification:', notificationId);
     return notificationId;
+  }
+
+  // Report call connected (for native UI)
+  reportCallConnected(callId: string): void {
+    if (callKeepService.isAvailable()) {
+      callKeepService.reportCallConnected(callId);
+    }
+  }
+
+  // End call in native UI
+  endCallNotification(callId: string): void {
+    if (callKeepService.isAvailable()) {
+      callKeepService.endCall(callId);
+    }
   }
 
   // Dismiss a specific notification

@@ -1,6 +1,7 @@
 import { CallSession, CallState, Contact } from '../types';
 import { generateId } from '../utils/helpers';
 import { messagingService } from './MessagingService';
+import { callKeepService } from './CallKeepService';
 
 // Default STUN servers (fallback)
 const DEFAULT_ICE_SERVERS = [
@@ -728,6 +729,11 @@ class CallService {
     console.log('[CallService] Cleaning up call resources...');
     this.isCleaningUp = true;
 
+    // End call on CallKeep (native call UI)
+    if (this.currentSession) {
+      callKeepService.endCall(this.currentSession.callId);
+    }
+
     // Stop local tracks first
     if (this.localStream) {
       try {
@@ -774,6 +780,9 @@ class CallService {
         (this.peerConnection as any).onicecandidate = null;
         (this.peerConnection as any).onconnectionstatechange = null;
         (this.peerConnection as any).ontrack = null;
+        (this.peerConnection as any).oniceconnectionstatechange = null;
+        (this.peerConnection as any).onsignalingstatechange = null;
+        (this.peerConnection as any).onicegatheringstatechange = null;
         this.peerConnection.close();
         console.log('[CallService] Peer connection closed');
       } catch (e) {
@@ -793,6 +802,59 @@ class CallService {
     this.cleanupCompleteTime = Date.now();
 
     console.log('[CallService] Cleanup complete');
+  }
+
+  // Force reset the entire call service state (for recovery from stuck states)
+  forceReset(): void {
+    console.log('[CallService] Force resetting call service...');
+
+    // End all CallKeep calls
+    callKeepService.endAllCalls();
+
+    // Force cleanup regardless of current state
+    this.isCleaningUp = false;
+
+    // Stop all tracks
+    if (this.localStream) {
+      try {
+        this.localStream.getTracks().forEach(track => {
+          try { track.stop(); } catch (e) {}
+        });
+      } catch (e) {}
+      this.localStream = null;
+    }
+
+    if (this.remoteStream) {
+      try {
+        this.remoteStream.getTracks().forEach(track => {
+          try { track.stop(); } catch (e) {}
+        });
+      } catch (e) {}
+      this.remoteStream = null;
+    }
+
+    // Close peer connection
+    if (this.peerConnection) {
+      try {
+        (this.peerConnection as any).onicecandidate = null;
+        (this.peerConnection as any).onconnectionstatechange = null;
+        (this.peerConnection as any).ontrack = null;
+        this.peerConnection.close();
+      } catch (e) {}
+      this.peerConnection = null;
+    }
+
+    // Clear all state
+    this.pendingIceCandidates = [];
+    this.currentSession = null;
+    this.cleanupCompleteTime = Date.now();
+
+    // Notify handlers
+    if (this.remoteStreamHandler) {
+      this.remoteStreamHandler(null);
+    }
+
+    console.log('[CallService] Force reset complete');
   }
 }
 
