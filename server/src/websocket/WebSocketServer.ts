@@ -10,6 +10,7 @@ import { blockService } from '../services/BlockService';
 import { rateLimiter } from '../services/RateLimiter';
 import { groupService } from '../services/GroupService';
 import { generateTurnCredentials } from '../index';
+import { pushService } from '../services/PushService';
 import {
   ClientMessage,
   ServerMessage,
@@ -799,6 +800,17 @@ export class WebSocketServer {
         },
       };
       this.send(recipient.socket, incomingCallMessage);
+
+      // Also send push notification to wake up the app if in background
+      if (recipient.pushToken) {
+        pushService.sendCallNotification(
+          recipient.pushToken,
+          client.whisperId,
+          callId,
+          isVideo || false
+        );
+      }
+
       console.log(`[WebSocket] ${isVideo ? 'Video' : 'Voice'} call initiated from ${client.whisperId} to ${toWhisperId}`);
     } else {
       // Recipient offline - send error back to caller

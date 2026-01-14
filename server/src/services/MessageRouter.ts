@@ -87,6 +87,14 @@ class MessageRouter {
 
       if (this.send(recipientSocket, message)) {
         console.log(`[MessageRouter] Delivered ${messageId} from ${fromWhisperId} to ${toWhisperId}`);
+
+        // Also send push notification to wake up app if in background
+        const pushToken = connectionManager.getPushToken(toWhisperId);
+        if (pushToken) {
+          pushService.sendMessageNotification(pushToken, fromWhisperId)
+            .catch(err => console.error('[MessageRouter] Push notification failed:', err));
+        }
+
         return 'delivered';
       }
     }

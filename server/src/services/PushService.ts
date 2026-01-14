@@ -95,6 +95,24 @@ class PushService {
     });
   }
 
+  // Send notification for incoming call
+  async sendCallNotification(
+    pushToken: string,
+    fromWhisperId: string,
+    callId: string,
+    isVideo: boolean
+  ): Promise<boolean> {
+    const title = isVideo ? 'Incoming Video Call' : 'Incoming Call';
+    const body = `${fromWhisperId.substring(0, 12)}... is calling you`;
+
+    return this.sendNotification(pushToken, title, body, {
+      type: 'incoming_call',
+      fromWhisperId,
+      callId,
+      isVideo,
+    });
+  }
+
   // Validate Expo push token format
   private isValidExpoPushToken(token: string): boolean {
     return token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken[');
