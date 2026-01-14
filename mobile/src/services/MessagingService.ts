@@ -36,6 +36,9 @@ class MessagingService {
     reject: (error: Error) => void;
   }> = new Map();
 
+  // TURN credentials handler (set by CallService)
+  public turnCredentialsHandler: ((credentials: any) => void) | null = null;
+
   // Event handlers - now arrays to support multiple listeners
   private messageHandlers: Set<MessageHandler> = new Set();
   private statusHandlers: Set<StatusHandler> = new Set();
@@ -910,6 +913,13 @@ class MessagingService {
 
         case 'public_key_response':
           this.handlePublicKeyResponse(message.payload);
+          break;
+
+        case 'turn_credentials':
+          // Forward to CallService handler
+          if (this.turnCredentialsHandler) {
+            this.turnCredentialsHandler(message.payload);
+          }
           break;
       }
     } catch (error) {

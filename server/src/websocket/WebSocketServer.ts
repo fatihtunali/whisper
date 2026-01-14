@@ -9,6 +9,7 @@ import { authService } from '../services/AuthService';
 import { blockService } from '../services/BlockService';
 import { rateLimiter } from '../services/RateLimiter';
 import { groupService } from '../services/GroupService';
+import { generateTurnCredentials } from '../index';
 import {
   ClientMessage,
   ServerMessage,
@@ -178,6 +179,10 @@ export class WebSocketServer {
 
       case 'lookup_public_key':
         this.handleLookupPublicKey(socket, message.payload);
+        break;
+
+      case 'get_turn_credentials':
+        this.handleGetTurnCredentials(socket);
         break;
 
       default:
@@ -1197,6 +1202,25 @@ export class WebSocketServer {
     this.send(socket, response);
 
     console.log(`[WebSocket] Public key lookup for ${whisperId} by ${client.whisperId}: ${exists ? 'found' : 'not found'}`);
+  }
+
+  // TURN credentials handler for WebRTC calls
+  private handleGetTurnCredentials(socket: WebSocket): void {
+    const client = connectionManager.getBySocket(socket);
+    if (!client) {
+      this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
+      return;
+    }
+
+    const credentials = generateTurnCredentials(client.whisperId);
+
+    const response: ServerMessage = {
+      type: 'turn_credentials',
+      payload: credentials,
+    };
+    this.send(socket, response);
+
+    console.log(`[WebSocket] TURN credentials sent to ${client.whisperId}`);
   }
 
   private send(socket: WebSocket, message: ServerMessage): void {

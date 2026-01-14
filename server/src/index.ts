@@ -1,9 +1,38 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { WebSocketServer } from './websocket/WebSocketServer';
 import { reportService } from './services/ReportService';
 import { adminService } from './services/AdminService';
+
+// TURN server configuration
+const TURN_SECRET = process.env.TURN_SECRET || 'WhisperTurnSecretKey2024SarjMobile!';
+const TURN_TTL = 24 * 60 * 60; // 24 hours in seconds
+
+// Generate time-limited TURN credentials
+function generateTurnCredentials(userId: string): { username: string; credential: string; ttl: number; urls: string[] } {
+  const timestamp = Math.floor(Date.now() / 1000) + TURN_TTL;
+  const username = `${timestamp}:${userId}`;
+  const credential = crypto
+    .createHmac('sha1', TURN_SECRET)
+    .update(username)
+    .digest('base64');
+
+  return {
+    username,
+    credential,
+    ttl: TURN_TTL,
+    urls: [
+      'stun:turn.sarjmobile.com:3479',
+      'turn:turn.sarjmobile.com:3479',
+      'turns:turn.sarjmobile.com:5350',
+    ],
+  };
+}
+
+// Export for use in WebSocket server
+export { generateTurnCredentials };
 
 // Load environment variables
 dotenv.config();
@@ -44,6 +73,13 @@ app.get('/stats', (_req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });
+});
+
+// TURN credentials endpoint (for WebRTC calls)
+app.get('/turn-credentials', (req, res) => {
+  const userId = (req.query.userId as string) || 'anonymous';
+  const credentials = generateTurnCredentials(userId);
+  res.json(credentials);
 });
 
 // CORS headers for API

@@ -62,7 +62,8 @@ export type ClientMessageType =
   | 'send_group_message'
   | 'update_group'
   | 'leave_group'
-  | 'lookup_public_key';
+  | 'lookup_public_key'
+  | 'get_turn_credentials';
 
 // Server -> Client message types
 export type ServerMessageType =
@@ -88,7 +89,8 @@ export type ServerMessageType =
   | 'group_message_received'
   | 'group_updated'
   | 'member_left_group'
-  | 'public_key_response';
+  | 'public_key_response'
+  | 'turn_credentials';
 
 // Client -> Server messages
 export interface RegisterMessage {
@@ -284,6 +286,13 @@ export interface LookupPublicKeyMessage {
   };
 }
 
+// Get TURN credentials message (Client -> Server)
+// Used for WebRTC calls to get time-limited TURN server credentials
+export interface GetTurnCredentialsMessage {
+  type: 'get_turn_credentials';
+  payload: Record<string, never>;
+}
+
 export type ClientMessage =
   | RegisterMessage
   | RegisterProofMessage
@@ -305,7 +314,8 @@ export type ClientMessage =
   | SendGroupMessageMessage
   | UpdateGroupMessage
   | LeaveGroupMessage
-  | LookupPublicKeyMessage;
+  | LookupPublicKeyMessage
+  | GetTurnCredentialsMessage;
 
 // Server -> Client messages
 export interface RegisterChallengeMessage {
@@ -543,6 +553,18 @@ export interface PublicKeyResponseMessage {
   };
 }
 
+// TURN credentials response message (Server -> Client)
+// Response to get_turn_credentials request
+export interface TurnCredentialsMessage {
+  type: 'turn_credentials';
+  payload: {
+    username: string;            // Time-limited username (timestamp:userId)
+    credential: string;          // HMAC-SHA1 credential
+    ttl: number;                 // Time to live in seconds
+    urls: string[];              // STUN/TURN server URLs
+  };
+}
+
 export type ServerMessage =
   | RegisterChallengeMessage
   | RegisterAckMessage
@@ -566,4 +588,5 @@ export type ServerMessage =
   | GroupMessageReceivedMessage
   | GroupUpdatedMessage
   | MemberLeftGroupMessage
-  | PublicKeyResponseMessage;
+  | PublicKeyResponseMessage
+  | TurnCredentialsMessage;

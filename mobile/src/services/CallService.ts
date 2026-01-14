@@ -2,11 +2,19 @@ import { CallSession, CallState, Contact } from '../types';
 import { generateId } from '../utils/helpers';
 import { messagingService } from './MessagingService';
 
-// WebRTC configuration
-const ICE_SERVERS = [
+// Default STUN servers (fallback)
+const DEFAULT_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
-  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:turn.sarjmobile.com:3479' },
 ];
+
+// TURN credentials interface
+interface TurnCredentials {
+  username: string;
+  credential: string;
+  ttl: number;
+  urls: string[];
+}
 
 type CallStateHandler = (state: CallState) => void;
 type RemoteStreamHandler = (stream: MediaStream | null) => void;
@@ -26,9 +34,75 @@ class CallService {
   // Pending ICE candidates (received before remote description is set)
   private pendingIceCandidates: RTCIceCandidateInit[] = [];
 
+  // TURN credentials
+  private turnCredentials: TurnCredentials | null = null;
+  private turnCredentialsExpiry: number = 0;
+
   constructor() {
     // Set up signaling message handlers
     this.setupSignalingHandlers();
+  }
+
+  // Request TURN credentials from server
+  async requestTurnCredentials(): Promise<TurnCredentials | null> {
+    // Check if we have valid cached credentials
+    if (this.turnCredentials && Date.now() < this.turnCredentialsExpiry) {
+      console.log('[CallService] Using cached TURN credentials');
+      return this.turnCredentials;
+    }
+
+    try {
+      // Request credentials via WebSocket
+      const response = await new Promise<TurnCredentials | null>((resolve) => {
+        const timeout = setTimeout(() => {
+          console.warn('[CallService] TURN credentials request timed out');
+          resolve(null);
+        }, 5000);
+
+        // Set up one-time listener for turn_credentials response
+        const originalHandler = (messagingService as any).turnCredentialsHandler;
+        (messagingService as any).turnCredentialsHandler = (credentials: TurnCredentials) => {
+          clearTimeout(timeout);
+          (messagingService as any).turnCredentialsHandler = originalHandler;
+          resolve(credentials);
+        };
+
+        // Send request
+        (messagingService as any).send({ type: 'get_turn_credentials', payload: {} });
+      });
+
+      if (response) {
+        this.turnCredentials = response;
+        // Set expiry to 1 hour before actual expiry for safety margin
+        this.turnCredentialsExpiry = Date.now() + (response.ttl - 3600) * 1000;
+        console.log('[CallService] TURN credentials received');
+      }
+
+      return response;
+    } catch (error) {
+      console.error('[CallService] Failed to get TURN credentials:', error);
+      return null;
+    }
+  }
+
+  // Build ICE servers config with TURN credentials
+  private async getIceServers(): Promise<RTCIceServer[]> {
+    const credentials = await this.requestTurnCredentials();
+
+    if (credentials) {
+      return [
+        ...DEFAULT_ICE_SERVERS,
+        ...credentials.urls.map(url => ({
+          urls: url,
+          username: credentials.username,
+          credential: credentials.credential,
+        })),
+      ];
+    }
+
+    // Fallback to default STUN only
+    console.warn('[CallService] Using default ICE servers (no TURN)');
+    return DEFAULT_ICE_SERVERS;
   }
 
   // Set event handlers
@@ -328,8 +402,12 @@ class CallService {
     // Dynamically import react-native-webrtc
     const { RTCPeerConnection, MediaStream: RNMediaStream } = await import('react-native-webrtc');
 
+    // Get ICE servers with TURN credentials
+    const iceServers = await this.getIceServers();
+    console.log('[CallService] Using ICE servers:', iceServers.map(s => s.urls));
+
     this.peerConnection = new RTCPeerConnection({
-      iceServers: ICE_SERVERS,
+      iceServers,
     }) as unknown as RTCPeerConnection;
 
     // Handle ICE candidates
