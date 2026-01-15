@@ -50,14 +50,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         messagingService.connect(user);
 
         // Initialize push notifications in parallel (don't block connection)
+        // setPushToken and setVoIPToken will auto-re-register if connected
         console.log('[AuthContext] Initializing push notifications...');
         notificationService.initialize().then((pushToken) => {
           if (pushToken) {
             messagingService.setPushToken(pushToken);
-            // Re-register with push token if already connected
-            if (messagingService.isConnected()) {
-              (messagingService as any).register();
-            }
+            // Note: setPushToken now auto-re-registers if connected
           }
         }).catch((err) => {
           console.warn('[AuthContext] Push notification init failed:', err);

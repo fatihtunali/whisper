@@ -145,18 +145,24 @@ whisper/
 
 ### 4.2 Messaging Features
 
-| Feature | Phase | Priority |
-|---------|-------|----------|
-| Text messages | Phase 2 | High |
-| Message status (sent/delivered/read) | Phase 2 | High |
-| Typing indicators | Phase 4 | Medium |
-| Image sharing | Future | Medium |
-| Voice messages | Future | Medium |
-| File sharing | Future | Low |
-| Voice calls | Future | Low |
-| Video calls | Future | Low |
-| Group chats | Future | Low |
-| Disappearing messages | Future | Medium |
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Text messages | ✅ Done | Full E2E encryption |
+| Message status (sent/delivered/read) | ✅ Done | Real-time receipts |
+| Typing indicators | ✅ Done | Privacy setting available |
+| Image sharing | ✅ Done | Encrypted attachments |
+| Voice messages | ✅ Done | With duration tracking |
+| File sharing | ✅ Done | With metadata |
+| Voice calls | ✅ Done | WebRTC + TURN |
+| Video calls | ✅ Done | WebRTC + TURN |
+| Group chats | ✅ Done | GRP-XXXX-XXXX-XXXX format |
+| Disappearing messages | ✅ Done | Per-conversation setting |
+| Message reactions | ✅ Done | Emoji reactions |
+| Reply to messages | ✅ Done | Quote-reply |
+| Message forwarding | ✅ Done | Forward to any contact |
+| User blocking | ✅ Done | Client & server-side |
+| User reporting | ✅ Done | Multiple categories |
+| Account deletion | ✅ Done | Cryptographic verification |
 
 ### 4.3 Contact Management
 
@@ -403,28 +409,29 @@ npm install -D typescript @types/node @types/express @types/ws ts-node-dev
 #### 3.2 Server Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Whisper Server                        │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────┐  │
-│  │ HTTP Server  │    │  WebSocket   │    │  Message  │  │
-│  │   (Express)  │    │   Server     │    │   Queue   │  │
-│  │              │    │              │    │           │  │
-│  │ /health      │    │ Connection   │    │ Pending   │  │
-│  │ /stats       │    │ Management   │    │ Messages  │  │
-│  │              │    │              │    │ (72h TTL) │  │
-│  └──────────────┘    └──────────────┘    └───────────┘  │
-│         │                   │                  │         │
-│         └───────────────────┴──────────────────┘         │
-│                            │                             │
-│                    ┌───────┴───────┐                     │
-│                    │  No Message   │                     │
-│                    │   Content     │                     │
-│                    │   Storage     │                     │
-│                    └───────────────┘                     │
-│                                                          │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        Whisper Server                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌─────────────────┐    │
+│  │ HTTP Server  │    │  WebSocket   │    │     Redis       │    │
+│  │   (Express)  │    │   Server     │    │                 │    │
+│  │              │    │              │    │ - Presence      │    │
+│  │ /health      │    │ Connection   │    │ - Push Tokens   │    │
+│  │ /stats       │    │ Management   │    │ - Public Keys   │    │
+│  │ /admin/*     │    │ Auth Service │    │ - Groups        │    │
+│  │ /turn-creds  │    │ Call Signal  │    │ - Message Queue │    │
+│  └──────────────┘    └──────────────┘    └─────────────────┘    │
+│         │                   │                     │              │
+│         └───────────────────┴─────────────────────┘              │
+│                            │                                     │
+│                    ┌───────┴───────┐                             │
+│                    │  Zero-Knowledge│                            │
+│                    │  E2E Encrypted │                            │
+│                    │  Message Relay │                            │
+│                    └───────────────┘                             │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 #### 3.3 WebSocket Protocol
@@ -432,17 +439,36 @@ npm install -D typescript @types/node @types/express @types/ws ts-node-dev
 **Client → Server Messages:**
 
 ```typescript
-// Register connection
-{ type: 'register', payload: { whisperId, publicKey } }
+// Authentication (challenge-response)
+{ type: 'register', payload: { whisperId, publicKey, signingPublicKey, pushToken?, voipToken?, platform?, prefs? } }
+{ type: 'register_proof', payload: { signature } } // Ed25519 signature of challenge
 
-// Send message
-{ type: 'send_message', payload: { messageId, toWhisperId, encryptedContent, nonce } }
+// Messaging
+{ type: 'send_message', payload: { messageId, toWhisperId, encryptedContent, nonce, encryptedVoice?, voiceDuration?, encryptedImage?, imageMetadata?, encryptedFile?, fileMetadata?, isForwarded?, replyTo? } }
+{ type: 'delivery_receipt', payload: { messageId, toWhisperId, status: 'delivered' | 'read' } }
+{ type: 'fetch_pending', payload: { cursor? } }
+{ type: 'reaction', payload: { messageId, toWhisperId, emoji } }
+{ type: 'typing', payload: { toWhisperId, isTyping } }
 
-// Acknowledge delivery
-{ type: 'delivery_receipt', payload: { messageId, status: 'delivered' | 'read' } }
+// User management
+{ type: 'report_user', payload: { reportedWhisperId, reason, description? } }
+{ type: 'block_user', payload: { whisperId } }
+{ type: 'unblock_user', payload: { whisperId } }
+{ type: 'delete_account', payload: { confirmation, timestamp, signature } }
+{ type: 'lookup_public_key', payload: { whisperId } }
 
-// Request pending messages
-{ type: 'fetch_pending', payload: {} }
+// Calls (WebRTC)
+{ type: 'call_initiate', payload: { toWhisperId, callId, offer, isVideo? } }
+{ type: 'call_answer', payload: { toWhisperId, callId, answer } }
+{ type: 'call_ice_candidate', payload: { toWhisperId, callId, candidate } }
+{ type: 'call_end', payload: { toWhisperId, callId } }
+{ type: 'get_turn_credentials', payload: {} }
+
+// Groups
+{ type: 'create_group', payload: { groupId, name, members } }
+{ type: 'send_group_message', payload: { groupId, messageId, encryptedContent, nonce, senderName? } }
+{ type: 'update_group', payload: { groupId, name?, addMembers?, removeMembers? } }
+{ type: 'leave_group', payload: { groupId } }
 
 // Heartbeat
 { type: 'ping', payload: {} }
@@ -451,22 +477,40 @@ npm install -D typescript @types/node @types/express @types/ws ts-node-dev
 **Server → Client Messages:**
 
 ```typescript
-// Registration confirmed
-{ type: 'register_ack', payload: { success: true } }
+// Authentication
+{ type: 'register_challenge', payload: { challenge } } // 32-byte random challenge
+{ type: 'register_ack', payload: { success, error? } }
 
-// New message received
-{ type: 'message_received', payload: { messageId, fromWhisperId, encryptedContent, nonce, timestamp } }
+// Messaging
+{ type: 'message_received', payload: { messageId, fromWhisperId, encryptedContent, nonce, timestamp, senderPublicKey?, ...attachments } }
+{ type: 'message_delivered', payload: { messageId, status: 'sent' | 'delivered' | 'pending', toWhisperId } }
+{ type: 'delivery_status', payload: { messageId, status: 'delivered' | 'read', fromWhisperId } }
+{ type: 'pending_messages', payload: { messages, cursor, nextCursor, hasMore } }
+{ type: 'reaction_received', payload: { messageId, fromWhisperId, emoji } }
+{ type: 'typing_status', payload: { fromWhisperId, isTyping } }
 
-// Message delivery status
-{ type: 'message_delivered', payload: { messageId, status: 'delivered' | 'pending' } }
+// User management
+{ type: 'report_ack', payload: { reportId, success } }
+{ type: 'block_ack', payload: { whisperId, success } }
+{ type: 'unblock_ack', payload: { whisperId, success } }
+{ type: 'account_deleted', payload: { success } }
+{ type: 'public_key_response', payload: { whisperId, publicKey, exists } }
 
-// Pending messages (on connect)
-{ type: 'pending_messages', payload: { messages: [...] } }
+// Calls
+{ type: 'incoming_call', payload: { fromWhisperId, callId, offer, isVideo } }
+{ type: 'call_answered', payload: { fromWhisperId, callId, answer } }
+{ type: 'call_ice_candidate', payload: { fromWhisperId, callId, candidate } }
+{ type: 'call_ended', payload: { fromWhisperId, callId } }
+{ type: 'turn_credentials', payload: { username, credential, ttl, urls } }
 
-// Heartbeat response
+// Groups
+{ type: 'group_created', payload: { groupId, name, createdBy, members, createdAt } }
+{ type: 'group_message_received', payload: { groupId, messageId, fromWhisperId, encryptedContent, nonce, timestamp, senderName? } }
+{ type: 'group_updated', payload: { groupId, updatedBy, name?, addedMembers?, removedMembers? } }
+{ type: 'member_left_group', payload: { groupId, memberId } }
+
+// System
 { type: 'pong', payload: {} }
-
-// Error
 { type: 'error', payload: { code, message } }
 ```
 
@@ -474,11 +518,22 @@ npm install -D typescript @types/node @types/express @types/ws ts-node-dev
 
 | File | Purpose |
 |------|---------|
-| `src/index.ts` | Entry point, start HTTP + WS servers |
-| `src/websocket/WebSocketServer.ts` | WebSocket connection handling |
-| `src/websocket/ConnectionManager.ts` | Track connected clients |
+| `src/index.ts` | Entry point, start HTTP + WS servers, admin API |
+| `src/websocket/WebSocketServer.ts` | WebSocket connection handling, all message handlers |
+| `src/websocket/ConnectionManager.ts` | Track connected clients, Redis integration |
 | `src/services/MessageRouter.ts` | Route messages to recipients |
-| `src/services/MessageQueue.ts` | Store messages for offline users |
+| `src/services/MessageQueue.ts` | Store messages for offline users (72h TTL) |
+| `src/services/AuthService.ts` | Challenge-response authentication |
+| `src/services/AdminService.ts` | User banning and moderation |
+| `src/services/ReportService.ts` | User reporting system |
+| `src/services/BlockService.ts` | User blocking functionality |
+| `src/services/GroupService.ts` | Group chat logic |
+| `src/services/GroupStore.ts` | Group data persistence |
+| `src/services/PushService.ts` | Push notification delivery |
+| `src/services/PushTokenStore.ts` | Push token persistence |
+| `src/services/PublicKeyStore.ts` | Public key storage for message requests |
+| `src/services/RateLimiter.ts` | Request rate limiting |
+| `src/services/RedisService.ts` | Redis connection management |
 | `src/types/index.ts` | TypeScript interfaces |
 
 #### 3.5 Deployment
@@ -583,26 +638,41 @@ server {
 
 ## 7. Security Considerations
 
-### What We Store on Server
-- Nothing permanent
-- Encrypted messages for offline users (max 72 hours)
-- No logs of who sends to whom
-- No IP address logging
+### What We Store on Server (Redis)
+- Encrypted messages for offline users (max 72 hours TTL)
+- Push tokens for notification delivery
+- Public keys for message request lookup
+- Group membership information
+- User presence status (temporary)
 
 ### What We DON'T Have Access To
-- Message content (encrypted)
+- Message content (E2E encrypted)
 - Private keys (never leave device)
-- User identities (anonymous)
+- User identities (anonymous Whisper IDs)
 - Contact lists (stored locally)
 - Chat history (stored locally)
+
+### Security Features
+| Feature | Implementation |
+|---------|---------------|
+| Authentication | Challenge-response with Ed25519 signatures |
+| Encryption | X25519 key exchange + XSalsa20-Poly1305 |
+| Key Storage | expo-secure-store (iOS Keychain, Android Keystore) |
+| Account Recovery | 12-word BIP39 seed phrase |
+| Account Deletion | Cryptographic signature verification |
+| User Blocking | Client + server-side enforcement |
+| User Reporting | Admin review system |
 
 ### Threat Model
 | Threat | Mitigation |
 |--------|------------|
-| Server compromise | Messages encrypted, no keys on server |
-| Man-in-the-middle | E2E encryption, key verification |
-| Device theft | Secure storage, optional PIN |
+| Server compromise | Messages E2E encrypted, no keys on server |
+| Man-in-the-middle | E2E encryption, key verification via QR |
+| Device theft | Secure storage, optional PIN lock |
 | Account hijacking | 12-word seed phrase (user responsibility) |
+| Replay attacks | Challenge-response authentication |
+| Impersonation | Ed25519 signature verification |
+| Spam/Harassment | Rate limiting, blocking, reporting |
 
 ---
 
@@ -643,9 +713,30 @@ Session 5: Phase 4 (Integration)
 
 ## 9. Current Status
 
-**Status: Planning Complete**
+**Status: ✅ Core Features Complete**
 
-**Next Action:** Start Phase 1, Task 1.1 - Create Next.js project
+### Completed
+- ✅ Phase 1: Landing Page Website (/, /privacy, /terms, /child-safety, /support)
+- ✅ Phase 2: Mobile App (full messaging, calls, groups)
+- ✅ Phase 3: Backend Server (WebSocket, Redis, Push notifications)
+- ✅ Phase 4: Integration & Testing
+- ✅ Phase 5: App Store Publishing (iOS/Android builds via EAS)
+
+### Additional Features Implemented
+- Challenge-response authentication (Ed25519)
+- Redis for high-performance presence management
+- Push notifications (Expo Push + VoIP)
+- WebRTC voice/video calls with TURN server
+- Group chats with member management
+- Message reactions, replies, forwarding
+- Disappearing messages
+- User blocking and reporting
+- Account deletion with cryptographic verification
+
+### Current Build
+- iOS/Android: Version 1.0.0, Build 8
+- Server: Running on 142.93.136.228:3031
+- Website: Running on sarjmobile.com
 
 ---
 

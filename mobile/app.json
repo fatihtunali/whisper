@@ -15,12 +15,17 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sarjmobile.whisper",
-      "buildNumber": "8",
+      "buildNumber": "10",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Whisper needs camera access to scan QR codes when adding contacts and to enable video calls with your contacts.",
         "NSMicrophoneUsageDescription": "Whisper needs microphone access to record voice messages and to enable voice and video calls with your contacts.",
-        "NSPhotoLibraryUsageDescription": "Whisper needs photo library access to let you share images in your conversations."
+        "NSPhotoLibraryUsageDescription": "Whisper needs photo library access to let you share images in your conversations.",
+        "UIBackgroundModes": [
+          "voip",
+          "fetch",
+          "remote-notification"
+        ]
       }
     },
     "android": {
@@ -31,7 +36,16 @@
       "edgeToEdgeEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.sarjmobile.whisper",
-      "versionCode": 8
+      "versionCode": 10,
+      "permissions": [
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+        "android.permission.READ_PHONE_STATE",
+        "android.permission.ACCESS_NOTIFICATION_POLICY",
+        "android.permission.VIBRATE",
+        "android.permission.WAKE_LOCK",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -44,7 +58,8 @@
     "owner": "fatihtunali",
     "plugins": [
       "expo-audio",
-      "expo-video"
+      "expo-video",
+      "expo-notifications"
     ]
   }
 }

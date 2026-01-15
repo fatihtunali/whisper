@@ -113,13 +113,21 @@ class PushService {
   ): Promise<boolean> {
     // Don't include message content in notification for privacy
     // Just notify that a new message arrived
-    const title = 'New Message';
-    const body = `You have a new message from ${fromWhisperId.substring(0, 12)}...`;
+    const title = 'Whisper';
+    const body = `New message from ${fromWhisperId.substring(0, 12)}...`;
 
-    return this.sendNotification(pushToken, title, body, {
+    console.log(`[PushService] Sending message notification to offline user, token: ${pushToken.substring(0, 30)}...`);
+
+    const result = await this.sendNotification(pushToken, title, body, {
       type: 'new_message',
       fromWhisperId,
     });
+
+    if (!result) {
+      console.error(`[PushService] Failed to deliver message notification for ${fromWhisperId}`);
+    }
+
+    return result;
   }
 
   // Send notification for incoming call (regular push)
@@ -152,7 +160,7 @@ class PushService {
     const keyId = process.env.APNS_KEY_ID;
     const teamId = process.env.APNS_TEAM_ID;
     const keyPath = process.env.APNS_KEY_PATH;
-    const bundleId = process.env.APNS_BUNDLE_ID || 'com.whisper.app';
+    const bundleId = process.env.APNS_BUNDLE_ID || 'com.sarjmobile.whisper';
     const isProduction = process.env.APNS_PRODUCTION === 'true';
 
     if (!keyId || !teamId || !keyPath) {
@@ -208,6 +216,12 @@ class PushService {
     }
 
     try {
+      // Check if key file exists
+      if (!fs.existsSync(keyPath)) {
+        console.error(`[PushService] APNs key file not found: ${keyPath}`);
+        return null;
+      }
+
       // Read the p8 key file
       const keyFile = fs.readFileSync(keyPath, 'utf8');
 

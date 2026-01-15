@@ -9,6 +9,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { secureStorage } from './src/storage/SecureStorage';
 import { callService } from './src/services/CallService';
+import { messagingService } from './src/services/MessagingService';
 import { navigationRef, navigate } from './src/utils/navigationRef';
 
 // Import screens
@@ -123,11 +124,16 @@ function RootNavigator() {
       appStateRef.current.match(/inactive|background/) &&
       nextAppState === 'active'
     ) {
+      console.log('[App] Returned to foreground');
+
       // Check if we should lock the app
       const settings = await secureStorage.getAppLockSettings();
       if (settings.enabled) {
         setIsLocked(true);
       }
+
+      // Reconnect WebSocket if needed (connection may have died while backgrounded)
+      messagingService.checkAndReconnect();
     }
     appStateRef.current = nextAppState;
   };

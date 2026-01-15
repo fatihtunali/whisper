@@ -491,6 +491,30 @@ class CallService {
     return this.currentSession.isSpeakerOn;
   }
 
+  // Private: Stop ringback tone and configure for active call
+  private async stopRingbackAndConfigureActiveCall(): Promise<void> {
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        // Stop the current InCallManager (which has ringback playing)
+        manager.stop();
+
+        // Restart without ringback for active call
+        const isVideo = this.currentSession?.isVideo || false;
+        manager.start({
+          media: isVideo ? 'video' : 'audio',
+          auto: true,
+          ringback: '', // No ringback for connected call
+        });
+        manager.setSpeakerphoneOn(this.currentSession?.isSpeakerOn || isVideo);
+        manager.setKeepScreenOn(true);
+        console.log('[CallService] Ringback stopped, active call mode configured');
+      } catch (e) {
+        console.warn('[CallService] Failed to reconfigure InCallManager:', e);
+      }
+    }
+  }
+
   // Private: Create peer connection
   private async createPeerConnection(): Promise<void> {
     // Dynamically import react-native-webrtc
@@ -516,11 +540,17 @@ class CallService {
     };
 
     // Handle connection state changes
-    (this.peerConnection as any).onconnectionstatechange = () => {
+    (this.peerConnection as any).onconnectionstatechange = async () => {
       const state = (this.peerConnection as any)?.connectionState;
       console.log('[CallService] Connection state:', state);
 
       if (state === 'connected') {
+        // Stop ringback as backup (in case call_answer handler didn't run first)
+        // Only for outgoing calls that had ringback
+        if (this.currentSession && !this.currentSession.isIncoming) {
+          await this.stopRingbackAndConfigureActiveCall();
+        }
+
         if (this.currentSession) {
           this.currentSession.state = 'connected';
           this.currentSession.startTime = Date.now();
@@ -670,6 +700,9 @@ class CallService {
         if (this.currentSession.callId !== message.callId) return;
 
         try {
+          // Stop ringback tone immediately when answer is received
+          await this.stopRingbackAndConfigureActiveCall();
+
           await this.peerConnection.setRemoteDescription({
             type: 'answer',
             sdp: message.sdp,

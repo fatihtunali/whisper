@@ -93,8 +93,16 @@ class MessageRouter {
     // Send push notification if recipient has a push token
     const pushToken = await connectionManager.getPushToken(toWhisperId);
     if (pushToken) {
+      console.log(`[MessageRouter] Sending push notification to offline ${toWhisperId}`);
       pushService.sendMessageNotification(pushToken, fromWhisperId)
+        .then(success => {
+          if (success) {
+            console.log(`[MessageRouter] Push notification sent successfully to ${toWhisperId}`);
+          }
+        })
         .catch(err => console.error('[MessageRouter] Push notification failed:', err));
+    } else {
+      console.warn(`[MessageRouter] No push token found for offline user ${toWhisperId} - notification not sent!`);
     }
 
     return 'pending';

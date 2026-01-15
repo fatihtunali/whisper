@@ -173,6 +173,8 @@ export default function CallScreen() {
         return 'Calling...';
       case 'ringing':
         return 'Incoming call...';
+      case 'connecting':
+        return 'Connecting...';
       case 'connected':
         return formatDuration(callDuration);
       case 'ended':
@@ -197,8 +199,8 @@ export default function CallScreen() {
 
       {/* Call Controls */}
       <View style={styles.controlsSection}>
-        {/* Mute and Speaker buttons (visible during connected call) */}
-        {callState === 'connected' && (
+        {/* Mute and Speaker buttons (visible during connecting/connected call) */}
+        {(callState === 'connected' || callState === 'connecting') && (
           <View style={styles.secondaryControls}>
             <TouchableOpacity
               style={[styles.controlButton, isMuted && styles.controlButtonActive]}

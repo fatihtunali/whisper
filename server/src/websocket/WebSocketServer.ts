@@ -293,6 +293,9 @@ export class WebSocketServer {
 
     await connectionManager.register(whisperId, publicKey, signingPublicKey, socket, pushToken, prefs, voipToken, platform);
 
+    // Log token registration status for debugging
+    console.log(`[WebSocket] Tokens for ${whisperId}: push=${pushToken ? 'yes' : 'NO'}, voip=${voipToken ? 'yes' : 'NO'}, platform=${platform || 'unknown'}`);
+
     // Send acknowledgment
     const ack: RegisterAckMessage = {
       type: 'register_ack',

@@ -32,6 +32,8 @@ class MessagingService {
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
   private isConnecting = false;
+  private isRegistering = false; // Track if registration is in progress
+  private needsReregistration = false; // Flag to re-register after current completes
   private reconnectAttempts = 0; // For exponential backoff
 
   // Pending public key lookups - for async request/response
@@ -155,16 +157,42 @@ class MessagingService {
     this.groupUpdateHandlers.forEach(handler => handler(groupId, updates));
   }
 
-  // Set push token (call before connect)
+  // Set push token - will re-register if already connected to update server
   setPushToken(token: string | null): void {
+    const hadToken = !!this.pushToken;
     this.pushToken = token;
     console.log('[MessagingService] Push token set:', token ? 'yes' : 'no');
+
+    // Re-register if connected and token changed
+    if (token && !hadToken && this.isConnected()) {
+      if (this.isRegistering) {
+        // Registration in progress, mark for re-registration when complete
+        console.log('[MessagingService] Registration in progress, will re-register after');
+        this.needsReregistration = true;
+      } else {
+        console.log('[MessagingService] Re-registering with new push token');
+        this.register();
+      }
+    }
   }
 
-  // Set VoIP token for iOS (call before connect)
+  // Set VoIP token for iOS - will re-register if already connected to update server
   setVoIPToken(token: string | null): void {
+    const hadToken = !!this.voipToken;
     this.voipToken = token;
     console.log('[MessagingService] VoIP token set:', token ? 'yes' : 'no');
+
+    // Re-register if connected and token changed
+    if (token && !hadToken && this.isConnected()) {
+      if (this.isRegistering) {
+        // Registration in progress, mark for re-registration when complete
+        console.log('[MessagingService] Registration in progress, will re-register after');
+        this.needsReregistration = true;
+      } else {
+        console.log('[MessagingService] Re-registering with new VoIP token');
+        this.register();
+      }
+    }
   }
 
   // Set platform (call before connect)
@@ -203,6 +231,8 @@ class MessagingService {
       this.ws.onclose = () => {
         console.log('[MessagingService] Disconnected');
         this.isConnecting = false;
+        this.isRegistering = false;
+        this.needsReregistration = false;
         this.stopPing();
         this.notifyConnectionHandlers(false);
         this.scheduleReconnect();
@@ -243,6 +273,45 @@ class MessagingService {
   // Check if connected
   isConnected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  // Check connection and reconnect if needed (called when app resumes from background)
+  async checkAndReconnect(): Promise<void> {
+    if (!this.user) {
+      console.log('[MessagingService] No user, skipping reconnect check');
+      return;
+    }
+
+    // Clear any pending reconnect timeout
+    if (this.reconnectTimeout) {
+      clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
+    }
+
+    // Check if WebSocket is actually connected
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log('[MessagingService] WebSocket already connected, sending ping');
+      this.send({ type: 'ping', payload: {} });
+      return;
+    }
+
+    // WebSocket is not connected, initiate reconnection
+    console.log('[MessagingService] WebSocket disconnected, reconnecting...');
+    this.reconnectAttempts = 0; // Reset backoff
+
+    // Close stale WebSocket if exists
+    if (this.ws) {
+      try {
+        this.ws.onclose = null; // Prevent recursive reconnect
+        this.ws.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+      this.ws = null;
+    }
+
+    // Reconnect immediately
+    this.connect(this.user);
   }
 
   // Send a message to a contact
@@ -830,6 +899,10 @@ class MessagingService {
   private async register(): Promise<void> {
     if (!this.user) return;
 
+    // Mark registration as in progress
+    this.isRegistering = true;
+    this.needsReregistration = false;
+
     // Get privacy settings
     const privacySettings = await secureStorage.getPrivacySettings();
 
@@ -839,6 +912,8 @@ class MessagingService {
       sendTypingIndicator: privacySettings.typingIndicator !== false, // Default true
       hideOnlineStatus: !privacySettings.showOnlineStatus,
     };
+
+    console.log(`[MessagingService] Registering with tokens: push=${this.pushToken ? 'yes' : 'no'}, voip=${this.voipToken ? 'yes' : 'no'}`);
 
     this.send({
       type: 'register',
@@ -867,6 +942,13 @@ class MessagingService {
 
         case 'register_ack':
           console.log('[MessagingService] Registered successfully');
+          this.isRegistering = false;
+          // Check if tokens were updated during registration
+          if (this.needsReregistration) {
+            console.log('[MessagingService] Tokens updated during registration, re-registering...');
+            this.needsReregistration = false;
+            this.register();
+          }
           break;
 
         case 'message_received':
@@ -1229,7 +1311,7 @@ class MessagingService {
 
       const filePath = `${voiceDir}${messageId}.m4a`;
       await FileSystem.writeAsStringAsync(filePath, base64Data, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64',
       });
 
       return filePath;
@@ -1254,7 +1336,7 @@ class MessagingService {
 
       const filePath = `${imagesDir}${messageId}.jpg`;
       await FileSystem.writeAsStringAsync(filePath, base64Data, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64',
       });
 
       return filePath;
@@ -1282,7 +1364,7 @@ class MessagingService {
       const filePath = `${filesDir}${messageId}${ext}`;
 
       await FileSystem.writeAsStringAsync(filePath, base64Data, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64',
       });
 
       return filePath;
