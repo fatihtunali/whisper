@@ -216,8 +216,16 @@ class CallService {
     const manager = await loadInCallManager();
     if (manager) {
       try {
-        manager.start({ media: isVideo ? 'video' : 'audio' });
+        // Start with appropriate media type
+        // - audio: enables proximity sensor (screen off when near ear), routes to earpiece
+        // - video: disables proximity, routes to speaker, keeps screen on
+        manager.start({
+          media: isVideo ? 'video' : 'audio',
+          auto: true, // Auto manage audio routing based on events (headset, etc.)
+          ringback: '_DTMF_', // Play ringback tone while calling
+        });
         manager.setSpeakerphoneOn(isVideo); // Speaker on for video calls
+        manager.setKeepScreenOn(true); // Keep screen on during call
         console.log('[CallService] InCallManager started for', isVideo ? 'video' : 'audio');
       } catch (e) {
         console.warn('[CallService] Failed to start InCallManager:', e);
@@ -288,8 +296,15 @@ class CallService {
     const manager = await loadInCallManager();
     if (manager) {
       try {
-        manager.start({ media: isVideo ? 'video' : 'audio' });
+        // Start with appropriate media type
+        // - audio: enables proximity sensor (screen off when near ear), routes to earpiece
+        // - video: disables proximity, routes to speaker, keeps screen on
+        manager.start({
+          media: isVideo ? 'video' : 'audio',
+          auto: true, // Auto manage audio routing based on events (headset, etc.)
+        });
         manager.setSpeakerphoneOn(isVideo); // Speaker on for video calls
+        manager.setKeepScreenOn(true); // Keep screen on during call
         console.log('[CallService] InCallManager started for incoming', isVideo ? 'video' : 'audio');
       } catch (e) {
         console.warn('[CallService] Failed to start InCallManager:', e);
@@ -863,12 +878,53 @@ class CallService {
     console.log('[CallService] Cleanup complete');
   }
 
+  // Get call quality statistics (useful for debugging)
+  async getCallStats(): Promise<{
+    bytesReceived?: number;
+    bytesSent?: number;
+    packetsLost?: number;
+    jitter?: number;
+    roundTripTime?: number;
+  } | null> {
+    if (!this.peerConnection) return null;
+
+    try {
+      const stats = await (this.peerConnection as any).getStats();
+      let result: any = {};
+
+      stats.forEach((report: any) => {
+        if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+          result.bytesReceived = report.bytesReceived;
+          result.packetsLost = report.packetsLost;
+          result.jitter = report.jitter;
+        } else if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+          result.bytesSent = report.bytesSent;
+        } else if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+          result.roundTripTime = report.currentRoundTripTime;
+        }
+      });
+
+      return result;
+    } catch (e) {
+      console.warn('[CallService] Failed to get call stats:', e);
+      return null;
+    }
+  }
+
   // Force reset the entire call service state (for recovery from stuck states)
-  forceReset(): void {
+  async forceReset(): Promise<void> {
     console.log('[CallService] Force resetting call service...');
 
     // End all CallKeep calls
     callKeepService.endAllCalls();
+
+    // Stop InCallManager
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.stop();
+      } catch (e) {}
+    }
 
     // Force cleanup regardless of current state
     this.isCleaningUp = false;
