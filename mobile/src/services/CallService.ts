@@ -216,11 +216,44 @@ class CallService {
     }
   }
 
+  // Check if there's a stale session that should be cleaned up
+  private isSessionStale(): boolean {
+    if (!this.currentSession) return false;
+
+    // Session is stale if:
+    // 1. State is 'ended'
+    // 2. isCleaningUp has been true for too long (> 5 seconds)
+    // 3. Session has been in 'calling' or 'ringing' state for too long (> 60 seconds)
+    const state = this.currentSession.state;
+
+    if (state === 'ended') return true;
+
+    if (state === 'calling' || state === 'ringing') {
+      // Check if stuck for more than 60 seconds
+      const sessionAge = this.currentSession.startTime
+        ? Date.now() - this.currentSession.startTime
+        : 60001; // If no startTime, assume stale
+      if (sessionAge > 60000) {
+        console.log('[CallService] Session stale - stuck in', state, 'for', sessionAge, 'ms');
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   // Start an outgoing call
   async startCall(contact: Contact, isVideo: boolean): Promise<string> {
-    // Check if cleanup is in progress or just completed
+    // Check if cleanup is in progress - but reset if stuck too long
     if (this.isCleaningUp) {
-      throw new Error('Previous call is still cleaning up');
+      console.log('[CallService] Cleanup was in progress, forcing reset...');
+      await this.forceReset();
+    }
+
+    // Clean up stale sessions
+    if (this.isSessionStale()) {
+      console.log('[CallService] Found stale session, forcing reset...');
+      await this.forceReset();
     }
 
     // Wait a bit after cleanup to ensure resources are released
@@ -758,8 +791,21 @@ class CallService {
     switch (message.type) {
       case 'call_offer':
         // Incoming call
+        // First, check if cleanup is stuck and force reset if needed
+        if (this.isCleaningUp) {
+          console.log('[CallService] Cleanup stuck, forcing reset for incoming call...');
+          await this.forceReset();
+        }
+
+        // Check for stale sessions and clean them up
+        if (this.isSessionStale()) {
+          console.log('[CallService] Stale session found, forcing reset for incoming call...');
+          await this.forceReset();
+        }
+
         if (this.currentSession) {
-          // Already in a call, reject
+          // Actually in an active call, reject
+          console.log('[CallService] Rejecting incoming call - already in active call:', this.currentSession.state);
           this.sendSignalingMessage(fromWhisperId, {
             type: 'call_reject',
             callId: message.callId,
