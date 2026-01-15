@@ -20,7 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
-import { useAudioRecorder, AudioModule, RecordingPresets } from 'expo-audio';
+import { useAudioRecorder, AudioModule, RecordingPresets, createAudioPlayer } from 'expo-audio';
 import { RouteProp, useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -58,7 +58,7 @@ export default function GroupChatScreen() {
   const flatListRef = useRef<FlatList>(null);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const audioPlayerRef = useRef<InstanceType<typeof AudioModule.AudioPlayer> | null>(null);
+  const audioPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
 
   // Max image size for sending
   const MAX_IMAGE_SIZE = 1024;
@@ -120,7 +120,7 @@ export default function GroupChatScreen() {
         clearInterval(recordingTimerRef.current);
       }
       if (audioPlayerRef.current) {
-        audioPlayerRef.current.remove();
+        audioPlayerRef.current.release();
       }
     };
   }, []);
@@ -386,7 +386,7 @@ export default function GroupChatScreen() {
     try {
       if (playingVoiceId === messageId) {
         if (audioPlayerRef.current) {
-          audioPlayerRef.current.remove();
+          audioPlayerRef.current.release();
           audioPlayerRef.current = null;
         }
         setPlayingVoiceId(null);
@@ -394,26 +394,25 @@ export default function GroupChatScreen() {
       }
 
       if (audioPlayerRef.current) {
-        audioPlayerRef.current.remove();
+        audioPlayerRef.current.release();
       }
 
-      const player = new AudioModule.AudioPlayer(uri, 500, false);
+      const player = createAudioPlayer(uri);
       audioPlayerRef.current = player;
       setPlayingVoiceId(messageId);
 
       // Set up listener for playback completion
-      player.addListener('playbackStatusUpdate', (status) => {
-        if (!status.playing && status.currentTime >= status.duration - 100) {
+      player.addListener('playbackStatusUpdate', (status: any) => {
+        if (status.didJustFinish || (!status.playing && status.currentTime >= status.duration - 0.1)) {
           setPlayingVoiceId(null);
+          player.release();
+          if (audioPlayerRef.current === player) {
+            audioPlayerRef.current = null;
+          }
         }
       });
 
-      player.play();
-
-      // Reset when done
-      setTimeout(() => {
-        setPlayingVoiceId(null);
-      }, 30000);
+      await player.play();
     } catch (error) {
       console.error('Failed to play voice:', error);
       setPlayingVoiceId(null);

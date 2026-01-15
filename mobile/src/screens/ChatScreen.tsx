@@ -24,7 +24,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { documentDirectory } from 'expo-file-system/legacy';
-import { useAudioRecorder, AudioModule, RecordingPresets } from 'expo-audio';
+import { useAudioRecorder, AudioModule, RecordingPresets, createAudioPlayer } from 'expo-audio';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -72,7 +72,7 @@ export default function ChatScreen() {
   const lastTypingSentRef = useRef<number>(0);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const audioPlayerRef = useRef<InstanceType<typeof AudioModule.AudioPlayer> | null>(null);
+  const audioPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
   const isMountedRef = useRef(true);
@@ -664,13 +664,26 @@ export default function ChatScreen() {
 
       console.log('[ChatScreen] Audio file read, base64 length:', base64.length);
 
-      // Send via messaging service
+      // Generate a unique ID for the voice file
+      const voiceId = `voice_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      // Copy to permanent location so sender can play it back
+      const voicesDir = `${documentDirectory}voices/`;
+      const dirInfo = await FileSystem.getInfoAsync(voicesDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(voicesDir, { intermediates: true });
+      }
+      const permanentUri = `${voicesDir}${voiceId}.m4a`;
+      await FileSystem.writeAsStringAsync(permanentUri, base64, { encoding: 'base64' });
+      console.log('[ChatScreen] Voice file saved to:', permanentUri);
+
+      // Send via messaging service with permanent URI
       console.log('[ChatScreen] Sending voice message via messaging service...');
       const sentMessage = await messagingService.sendVoiceMessage(
         contact,
         base64,
         duration,
-        uri
+        permanentUri
       );
 
       console.log('[ChatScreen] Voice message returned:', sentMessage?.id, 'voice:', !!sentMessage?.voice);
@@ -708,12 +721,12 @@ export default function ChatScreen() {
         playsInSilentMode: true,
       });
 
-      // Create and play the sound
-      const player = new AudioModule.AudioPlayer(voiceUri, 500, false);
+      // Create and play the sound using the correct API
+      const player = createAudioPlayer(voiceUri);
 
       // Set up listener for when playback finishes
-      player.addListener('playbackStatusUpdate', (status) => {
-        if (status.didJustFinish) {
+      player.addListener('playbackStatusUpdate', (status: any) => {
+        if (status.didJustFinish || (status.playing === false && status.currentTime >= status.duration - 0.1)) {
           setPlayingVoiceId(null);
           player.release();
           if (audioPlayerRef.current === player) {
@@ -723,7 +736,7 @@ export default function ChatScreen() {
       });
 
       audioPlayerRef.current = player;
-      player.play();
+      await player.play();
       setPlayingVoiceId(messageId);
     } catch (error) {
       console.error('Failed to play voice:', error);
