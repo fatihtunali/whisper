@@ -642,6 +642,22 @@ class CallService {
           callId: payload.callId,
         });
         break;
+      case 'call_ringing':
+        // Recipient's phone is ringing - update caller's state
+        if (this.currentSession && this.currentSession.callId === payload.callId) {
+          console.log('[CallService] Call ringing on recipient device');
+          this.currentSession.state = 'ringing';
+          this.notifyStateChange('ringing');
+        }
+        break;
+      case 'recipient_offline':
+        // Recipient is not available - notify caller
+        if (this.currentSession) {
+          console.log('[CallService] Recipient is offline');
+          this.notifyStateChange('no_answer');
+          this.cleanup();
+        }
+        break;
     }
   }
 

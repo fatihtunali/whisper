@@ -62,6 +62,14 @@ export default function CallScreen() {
         setTimeout(() => {
           navigation.goBack();
         }, 500);
+      } else if (state === 'no_answer') {
+        // User not available - show message briefly then go back
+        if (durationTimerRef.current) {
+          clearInterval(durationTimerRef.current);
+        }
+        setTimeout(() => {
+          navigation.goBack();
+        }, 2000);
       }
     };
 
@@ -172,13 +180,17 @@ export default function CallScreen() {
       case 'calling':
         return 'Calling...';
       case 'ringing':
-        return 'Incoming call...';
+        // For outgoing calls, 'ringing' means recipient's phone is ringing
+        // For incoming calls, 'ringing' means the call is incoming
+        return isIncoming ? 'Incoming call...' : 'Ringing...';
       case 'connecting':
         return 'Connecting...';
       case 'connected':
         return formatDuration(callDuration);
       case 'ended':
         return 'Call ended';
+      case 'no_answer':
+        return 'User not available';
       default:
         return '';
     }

@@ -180,7 +180,7 @@ export type RootStackParamList = {
 };
 
 // Call types
-export type CallState = 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended';
+export type CallState = 'idle' | 'calling' | 'ringing' | 'connecting' | 'connected' | 'ended' | 'no_answer';
 
 export interface CallSession {
   callId: string;

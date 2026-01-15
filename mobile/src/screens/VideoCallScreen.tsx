@@ -116,6 +116,11 @@ export default function VideoCallScreen() {
       setCallState(state);
       if (state === 'ended') {
         handleCallEnded();
+      } else if (state === 'no_answer') {
+        // User not available - show message briefly then go back
+        setTimeout(() => {
+          handleCallEnded();
+        }, 2000);
       }
       // Update local stream when connected
       if (state === 'connected' || state === 'connecting') {
@@ -288,13 +293,17 @@ export default function VideoCallScreen() {
       case 'calling':
         return 'Calling...';
       case 'ringing':
-        return 'Incoming video call';
+        // For outgoing calls, 'ringing' means recipient's phone is ringing
+        // For incoming calls, 'ringing' means the call is incoming
+        return isIncoming ? 'Incoming video call' : 'Ringing...';
       case 'connecting':
         return 'Connecting...';
       case 'connected':
         return formatDuration(callDuration);
       case 'ended':
         return 'Call ended';
+      case 'no_answer':
+        return 'User not available';
       default:
         return '';
     }

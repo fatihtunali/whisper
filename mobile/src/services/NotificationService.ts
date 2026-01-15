@@ -16,47 +16,8 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Configure how notifications are handled when app is in background
-// This runs in a headless JS context
-Notifications.registerTaskAsync?.('BACKGROUND_NOTIFICATION_TASK').catch(() => {
-  // Task registration may fail on some platforms, ignore
-});
-
-// Set background notification handler for processing notifications when app is backgrounded
-if (Notifications.setBackgroundNotificationHandler) {
-  Notifications.setBackgroundNotificationHandler(async (notification) => {
-    console.log('[NotificationService] Background notification received:', notification.request.content);
-
-    const data = notification.request.content.data as Record<string, unknown> | undefined;
-
-    // Handle incoming call in background
-    if (data?.type === 'incoming_call') {
-      // The VoIP push or CallKeep will handle the native call UI
-      // This handler ensures the notification is processed
-      return {
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      };
-    }
-
-    // Handle new message notification
-    if (data?.type === 'new_message') {
-      return {
-        shouldShowAlert: true,
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-      };
-    }
-
-    // Default handling for other notification types
-    return {
-      shouldShowAlert: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-    };
-  });
-}
+// Note: Background notification handling is done via setNotificationHandler above
+// which handles both foreground and background notifications on iOS/Android
 
 class NotificationService {
   private pushToken: string | null = null;
@@ -208,6 +169,14 @@ class NotificationService {
         onNotificationResponse?.(response);
       }
     );
+
+    // Check for notification that launched the app (when app was killed)
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) {
+        console.log('[NotificationService] App launched from notification:', response);
+        onNotificationResponse?.(response);
+      }
+    });
   }
 
   // Remove notification listeners

@@ -826,6 +826,15 @@ export class WebSocketServer {
       };
       this.send(recipient.socket, incomingCallMessage);
 
+      // Notify caller that the call is ringing on recipient's device
+      this.send(socket, {
+        type: 'call_ringing',
+        payload: {
+          callId,
+          toWhisperId,
+        },
+      });
+
       // Also send push notification to wake up the app if in background
       if (recipient.pushToken) {
         pushService.sendCallNotification(

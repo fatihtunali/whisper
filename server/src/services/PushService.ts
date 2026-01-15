@@ -21,6 +21,7 @@ interface ExpoPushMessage {
   badge?: number;
   channelId?: string;
   priority?: 'default' | 'normal' | 'high';
+  _contentAvailable?: boolean; // iOS: wake up app in background
 }
 
 interface ExpoPushResponse {
@@ -68,6 +69,7 @@ class PushService {
       sound: 'default',
       channelId: 'messages', // Android channel
       priority: 'high', // Ensure high priority for immediate delivery
+      _contentAvailable: true, // iOS: wake up app in background to process notification
     };
 
     console.log(`[PushService] Sending notification to token: ${pushToken.substring(0, 30)}...`);

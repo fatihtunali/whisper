@@ -977,6 +977,10 @@ class MessagingService {
 
         case 'error':
           console.error('[MessagingService] Server error:', message.payload);
+          // Handle specific call-related errors
+          if (message.payload.code === 'RECIPIENT_OFFLINE') {
+            this.handleCallSignaling('recipient_offline', message.payload);
+          }
           break;
 
         case 'reaction_received':
@@ -992,6 +996,7 @@ class MessagingService {
         case 'call_answered':
         case 'call_ice_candidate':
         case 'call_ended':
+        case 'call_ringing':
           this.handleCallSignaling(message.type, message.payload);
           break;
 

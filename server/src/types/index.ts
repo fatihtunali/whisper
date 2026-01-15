@@ -85,6 +85,7 @@ export type ServerMessageType =
   | 'call_answered'
   | 'call_ice_candidate'
   | 'call_ended'
+  | 'call_ringing'
   | 'group_created'
   | 'group_message_received'
   | 'group_updated'
@@ -498,6 +499,14 @@ export interface CallEndedMessage {
   };
 }
 
+export interface CallRingingMessage {
+  type: 'call_ringing';
+  payload: {
+    callId: string;
+    toWhisperId: string;
+  };
+}
+
 // Group messages (Server -> Client)
 export interface GroupCreatedMessage {
   type: 'group_created';
@@ -584,6 +593,7 @@ export type ServerMessage =
   | CallAnsweredMessage
   | CallIceCandidateReceivedMessage
   | CallEndedMessage
+  | CallRingingMessage
   | GroupCreatedMessage
   | GroupMessageReceivedMessage
   | GroupUpdatedMessage
