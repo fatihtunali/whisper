@@ -229,12 +229,12 @@ class CallService {
 
     // Session is stale if:
     // 1. State is 'ended'
-    // 2. isCleaningUp has been true for too long (> 5 seconds)
-    // 3. Session has been in 'calling' or 'ringing' state for too long (> 60 seconds)
+    // 2. Session has been in 'calling', 'ringing', or 'connecting' state for too long
     const state = this.currentSession.state;
 
     if (state === 'ended') return true;
 
+    // Check timeout for pre-connected states
     if (state === 'calling' || state === 'ringing') {
       // Check if stuck for more than 60 seconds
       const sessionAge = this.currentSession.startTime
@@ -242,6 +242,17 @@ class CallService {
         : 60001; // If no startTime, assume stale
       if (sessionAge > 60000) {
         console.log('[CallService] Session stale - stuck in', state, 'for', sessionAge, 'ms');
+        return true;
+      }
+    }
+
+    // Connecting state has shorter timeout (30 seconds) since it should complete quickly
+    if (state === 'connecting') {
+      const sessionAge = this.currentSession.startTime
+        ? Date.now() - this.currentSession.startTime
+        : 30001;
+      if (sessionAge > 30000) {
+        console.log('[CallService] Session stale - stuck in connecting for', sessionAge, 'ms');
         return true;
       }
     }
@@ -355,7 +366,8 @@ class CallService {
       return callId;
     } catch (error) {
       console.error('[CallService] Failed to start call:', error);
-      this.endCall();
+      // Await endCall to ensure cleanup completes before throwing
+      await this.endCall();
       throw error;
     }
   }
@@ -449,53 +461,74 @@ class CallService {
       console.log('[CallService] Call accepted:', callId);
     } catch (error) {
       console.error('[CallService] Failed to accept call:', error);
-      this.endCall();
+      // Await endCall to ensure cleanup completes before throwing
+      await this.endCall();
       throw error;
     }
   }
 
   // Reject an incoming call
   async rejectCall(callId: string, contactId: string): Promise<void> {
-    this.sendSignalingMessage(contactId, {
-      type: 'call_reject',
-      callId,
-    });
+    // Prevent multiple reject invocations
+    if (this.isCleaningUp) {
+      console.log('[CallService] Already cleaning up, ignoring reject');
+      return;
+    }
+
+    // Set cleanup flag immediately
+    this.isCleaningUp = true;
+
+    try {
+      this.sendSignalingMessage(contactId, {
+        type: 'call_reject',
+        callId,
+      });
+    } catch (e) {
+      console.warn('[CallService] Failed to send call_reject signal:', e);
+    }
 
     // Store session for cleanup and clear immediately
     const sessionToClean = this.currentSession;
     this.currentSession = null;
 
-    await this.cleanup(sessionToClean);
+    await this.cleanup(sessionToClean, true);
     console.log('[CallService] Call rejected:', callId);
   }
 
   // End the current call
   async endCall(): Promise<void> {
-    // Prevent multiple endCall invocations
+    // Prevent multiple endCall invocations - set flag immediately to prevent races
     if (this.isCleaningUp) {
       console.log('[CallService] Already ending call, ignoring duplicate');
       return;
     }
 
+    // Set cleanup flag IMMEDIATELY to prevent race conditions
+    this.isCleaningUp = true;
+
     // Store session info before clearing for cleanup
     const sessionToClean = this.currentSession;
-
-    if (sessionToClean) {
-      // Notify remote peer
-      this.sendSignalingMessage(sessionToClean.contactId, {
-        type: 'call_end',
-        callId: sessionToClean.callId,
-      });
-    }
 
     // Clear session immediately to allow new calls
     this.currentSession = null;
 
+    if (sessionToClean) {
+      // Notify remote peer - wrap in try-catch to ensure cleanup continues
+      try {
+        this.sendSignalingMessage(sessionToClean.contactId, {
+          type: 'call_end',
+          callId: sessionToClean.callId,
+        });
+      } catch (e) {
+        console.warn('[CallService] Failed to send call_end signal:', e);
+      }
+    }
+
     this.notifyStateChange('ended');
     console.log('[CallService] Call ended');
 
-    // Run cleanup with stored session info
-    await this.cleanup(sessionToClean);
+    // Run cleanup with stored session info (isCleaningUp already set)
+    await this.cleanup(sessionToClean, true);
   }
 
   // Toggle mute
@@ -578,20 +611,28 @@ class CallService {
   async toggleSpeaker(): Promise<boolean> {
     if (!this.currentSession) return false;
 
-    this.currentSession.isSpeakerOn = !this.currentSession.isSpeakerOn;
+    // Store the new speaker state locally in case session becomes null during await
+    const newSpeakerState = !this.currentSession.isSpeakerOn;
+    this.currentSession.isSpeakerOn = newSpeakerState;
 
     // Use InCallManager for actual speaker control
-    const manager = await loadInCallManager();
-    if (manager) {
-      try {
-        manager.setSpeakerphoneOn(this.currentSession.isSpeakerOn);
-        console.log('[CallService] Speaker:', this.currentSession.isSpeakerOn ? 'ON' : 'OFF');
-      } catch (e) {
-        console.warn('[CallService] Failed to set speaker:', e);
+    try {
+      const manager = await loadInCallManager();
+      // Re-check session after async operation
+      if (manager && this.currentSession) {
+        try {
+          manager.setSpeakerphoneOn(newSpeakerState);
+          console.log('[CallService] Speaker:', newSpeakerState ? 'ON' : 'OFF');
+        } catch (e) {
+          console.warn('[CallService] Failed to set speaker:', e);
+        }
       }
+    } catch (e) {
+      console.warn('[CallService] Failed to load InCallManager for speaker toggle:', e);
     }
 
-    return this.currentSession.isSpeakerOn;
+    // Return the state we set (may differ from currentSession if it became null)
+    return this.currentSession?.isSpeakerOn ?? newSpeakerState;
   }
 
   // Private: Stop ringback tone and configure for active call
@@ -733,7 +774,7 @@ class CallService {
   }
 
   // Handle incoming WebSocket call message from MessagingService
-  handleWebSocketMessage(type: string, payload: any): void {
+  async handleWebSocketMessage(type: string, payload: any): Promise<void> {
     switch (type) {
       case 'incoming_call':
         // Map to internal format and handle
@@ -779,7 +820,8 @@ class CallService {
           const sessionToClean = this.currentSession;
           this.currentSession = null;
           this.notifyStateChange('no_answer');
-          this.cleanup(sessionToClean);
+          // Await cleanup to ensure resources are released before any new operations
+          await this.cleanup(sessionToClean);
         }
         break;
     }
@@ -878,7 +920,8 @@ class CallService {
           const sessionToClean = this.currentSession;
           this.currentSession = null;
           this.notifyStateChange('ended');
-          this.cleanup(sessionToClean);
+          // Await cleanup to ensure resources are released
+          await this.cleanup(sessionToClean);
         }
         break;
 
@@ -888,7 +931,8 @@ class CallService {
           const sessionToClean = this.currentSession;
           this.currentSession = null;
           this.notifyStateChange('ended');
-          this.cleanup(sessionToClean);
+          // Await cleanup to ensure resources are released
+          await this.cleanup(sessionToClean);
         }
         break;
 
@@ -986,99 +1030,124 @@ class CallService {
   }
 
   // Private: Cleanup resources
-  private async cleanup(sessionToClean?: CallSession | null): Promise<void> {
+  // @param sessionToClean - The session to clean up
+  // @param alreadyLocked - If true, isCleaningUp was already set by caller (endCall)
+  private async cleanup(sessionToClean?: CallSession | null, alreadyLocked: boolean = false): Promise<void> {
     console.log('[CallService] Cleaning up call resources...');
-    this.isCleaningUp = true;
 
-    // Use passed session or fall back to currentSession
-    const session = sessionToClean || this.currentSession;
-
-    // End call on CallKeep (native call UI)
-    if (session) {
-      callKeepService.endCall(session.callId);
-    }
-
-    // Stop InCallManager
-    const manager = await loadInCallManager();
-    if (manager) {
-      try {
-        manager.stop();
-        console.log('[CallService] InCallManager stopped');
-      } catch (e) {
-        console.warn('[CallService] Failed to stop InCallManager:', e);
+    // Set cleanup flag if not already set by caller
+    if (!alreadyLocked) {
+      if (this.isCleaningUp) {
+        console.log('[CallService] Cleanup already in progress, skipping');
+        return;
       }
+      this.isCleaningUp = true;
     }
 
-    // Stop local tracks first
-    if (this.localStream) {
+    // Use try-finally to ALWAYS reset isCleaningUp
+    try {
+      // Use passed session or fall back to currentSession
+      const session = sessionToClean || this.currentSession;
+
+      // End call on CallKeep (native call UI)
+      if (session) {
+        try {
+          callKeepService.endCall(session.callId);
+        } catch (e) {
+          console.warn('[CallService] Failed to end CallKeep call:', e);
+        }
+      }
+
+      // Stop InCallManager
       try {
-        const tracks = this.localStream.getTracks();
-        tracks.forEach(track => {
+        const manager = await loadInCallManager();
+        if (manager) {
           try {
-            track.stop();
-            console.log('[CallService] Stopped track:', track.kind);
+            manager.stop();
+            console.log('[CallService] InCallManager stopped');
           } catch (e) {
-            console.warn('[CallService] Failed to stop track:', e);
+            console.warn('[CallService] Failed to stop InCallManager:', e);
           }
-        });
+        }
       } catch (e) {
-        console.warn('[CallService] Failed to get tracks:', e);
+        console.warn('[CallService] Failed to load InCallManager for cleanup:', e);
       }
-      this.localStream = null;
-    }
 
-    // Clear remote stream
-    if (this.remoteStream) {
-      try {
-        const tracks = this.remoteStream.getTracks();
-        tracks.forEach(track => {
-          try {
-            track.stop();
-          } catch (e) {
-            // Ignore errors stopping remote tracks
-          }
-        });
-      } catch (e) {
-        // Ignore
+      // Stop local tracks first
+      if (this.localStream) {
+        try {
+          const tracks = this.localStream.getTracks();
+          tracks.forEach(track => {
+            try {
+              track.stop();
+              console.log('[CallService] Stopped track:', track.kind);
+            } catch (e) {
+              console.warn('[CallService] Failed to stop track:', e);
+            }
+          });
+        } catch (e) {
+          console.warn('[CallService] Failed to get tracks:', e);
+        }
+        this.localStream = null;
       }
-      this.remoteStream = null;
-    }
 
-    if (this.remoteStreamHandler) {
-      this.remoteStreamHandler(null);
-    }
-
-    // Close peer connection
-    if (this.peerConnection) {
-      try {
-        // Remove event handlers before closing to prevent callbacks during cleanup
-        (this.peerConnection as any).onicecandidate = null;
-        (this.peerConnection as any).onconnectionstatechange = null;
-        (this.peerConnection as any).ontrack = null;
-        (this.peerConnection as any).oniceconnectionstatechange = null;
-        (this.peerConnection as any).onsignalingstatechange = null;
-        (this.peerConnection as any).onicegatheringstatechange = null;
-        this.peerConnection.close();
-        console.log('[CallService] Peer connection closed');
-      } catch (e) {
-        console.warn('[CallService] Failed to close peer connection:', e);
+      // Clear remote stream
+      if (this.remoteStream) {
+        try {
+          const tracks = this.remoteStream.getTracks();
+          tracks.forEach(track => {
+            try {
+              track.stop();
+            } catch (e) {
+              // Ignore errors stopping remote tracks
+            }
+          });
+        } catch (e) {
+          // Ignore
+        }
+        this.remoteStream = null;
       }
-      this.peerConnection = null;
+
+      if (this.remoteStreamHandler) {
+        try {
+          this.remoteStreamHandler(null);
+        } catch (e) {
+          console.warn('[CallService] Failed to notify remote stream handler:', e);
+        }
+      }
+
+      // Close peer connection
+      if (this.peerConnection) {
+        try {
+          // Remove ALL event handlers before closing to prevent callbacks during cleanup
+          (this.peerConnection as any).onicecandidate = null;
+          (this.peerConnection as any).onconnectionstatechange = null;
+          (this.peerConnection as any).ontrack = null;
+          (this.peerConnection as any).oniceconnectionstatechange = null;
+          (this.peerConnection as any).onsignalingstatechange = null;
+          (this.peerConnection as any).onicegatheringstatechange = null;
+          this.peerConnection.close();
+          console.log('[CallService] Peer connection closed');
+        } catch (e) {
+          console.warn('[CallService] Failed to close peer connection:', e);
+        }
+        this.peerConnection = null;
+      }
+
+      // Clear pending ICE candidates
+      this.pendingIceCandidates = [];
+
+      // Clear session (may already be null if endCall was called)
+      if (this.currentSession) {
+        this.currentSession = null;
+      }
+
+      console.log('[CallService] Cleanup complete');
+    } finally {
+      // ALWAYS reset cleanup flag, even if an error occurred
+      this.isCleaningUp = false;
+      this.cleanupCompleteTime = Date.now();
     }
-
-    // Clear pending ICE candidates
-    this.pendingIceCandidates = [];
-
-    // Clear session (may already be null if endCall was called)
-    if (this.currentSession) {
-      this.currentSession = null;
-    }
-
-    // Mark cleanup as complete
-    this.isCleaningUp = false;
-    this.cleanupCompleteTime = Date.now();
-
-    console.log('[CallService] Cleanup complete');
   }
 
   // Get call quality statistics (useful for debugging)
@@ -1118,61 +1187,86 @@ class CallService {
   async forceReset(): Promise<void> {
     console.log('[CallService] Force resetting call service...');
 
-    // End all CallKeep calls
-    callKeepService.endAllCalls();
+    // Use try-finally to ensure cleanup flag is always reset
+    try {
+      // Mark as cleaning up to prevent concurrent operations
+      this.isCleaningUp = true;
 
-    // Stop InCallManager
-    const manager = await loadInCallManager();
-    if (manager) {
+      // End all CallKeep calls
       try {
-        manager.stop();
-      } catch (e) {}
-    }
+        callKeepService.endAllCalls();
+      } catch (e) {
+        console.warn('[CallService] Failed to end CallKeep calls:', e);
+      }
 
-    // Force cleanup regardless of current state
-    this.isCleaningUp = false;
-
-    // Stop all tracks
-    if (this.localStream) {
+      // Stop InCallManager
       try {
-        this.localStream.getTracks().forEach(track => {
-          try { track.stop(); } catch (e) {}
-        });
-      } catch (e) {}
-      this.localStream = null;
+        const manager = await loadInCallManager();
+        if (manager) {
+          try {
+            manager.stop();
+          } catch (e) {
+            console.warn('[CallService] Failed to stop InCallManager:', e);
+          }
+        }
+      } catch (e) {
+        console.warn('[CallService] Failed to load InCallManager:', e);
+      }
+
+      // Stop all tracks
+      if (this.localStream) {
+        try {
+          this.localStream.getTracks().forEach(track => {
+            try { track.stop(); } catch (e) {}
+          });
+        } catch (e) {}
+        this.localStream = null;
+      }
+
+      if (this.remoteStream) {
+        try {
+          this.remoteStream.getTracks().forEach(track => {
+            try { track.stop(); } catch (e) {}
+          });
+        } catch (e) {}
+        this.remoteStream = null;
+      }
+
+      // Close peer connection - remove ALL event handlers
+      if (this.peerConnection) {
+        try {
+          (this.peerConnection as any).onicecandidate = null;
+          (this.peerConnection as any).onconnectionstatechange = null;
+          (this.peerConnection as any).ontrack = null;
+          (this.peerConnection as any).oniceconnectionstatechange = null;
+          (this.peerConnection as any).onsignalingstatechange = null;
+          (this.peerConnection as any).onicegatheringstatechange = null;
+          this.peerConnection.close();
+        } catch (e) {
+          console.warn('[CallService] Failed to close peer connection:', e);
+        }
+        this.peerConnection = null;
+      }
+
+      // Clear all state
+      this.pendingIceCandidates = [];
+      this.currentSession = null;
+
+      // Notify handlers
+      if (this.remoteStreamHandler) {
+        try {
+          this.remoteStreamHandler(null);
+        } catch (e) {
+          console.warn('[CallService] Failed to notify remote stream handler:', e);
+        }
+      }
+
+      console.log('[CallService] Force reset complete');
+    } finally {
+      // ALWAYS reset cleanup flag
+      this.isCleaningUp = false;
+      this.cleanupCompleteTime = Date.now();
     }
-
-    if (this.remoteStream) {
-      try {
-        this.remoteStream.getTracks().forEach(track => {
-          try { track.stop(); } catch (e) {}
-        });
-      } catch (e) {}
-      this.remoteStream = null;
-    }
-
-    // Close peer connection
-    if (this.peerConnection) {
-      try {
-        (this.peerConnection as any).onicecandidate = null;
-        (this.peerConnection as any).onconnectionstatechange = null;
-        (this.peerConnection as any).ontrack = null;
-        this.peerConnection.close();
-      } catch (e) {}
-      this.peerConnection = null;
-    }
-
-    // Clear all state
-    this.pendingIceCandidates = [];
-    this.currentSession = null;
-    this.cleanupCompleteTime = Date.now();
-
-    // Notify handlers
-    if (this.remoteStreamHandler) {
-      this.remoteStreamHandler(null);
-    }
-
-    console.log('[CallService] Force reset complete');
   }
 }
 

@@ -80,6 +80,12 @@ export default function CallScreen() {
       if (durationTimerRef.current) {
         clearInterval(durationTimerRef.current);
       }
+      // End call on unmount if still active (e.g., user navigated away forcefully)
+      const session = callService.getCurrentSession();
+      if (session && session.state !== 'ended') {
+        console.log('[CallScreen] Ending call on unmount - session still active');
+        callService.endCall();
+      }
     };
   }, [navigation]);
 

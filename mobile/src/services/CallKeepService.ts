@@ -344,17 +344,26 @@ class CallKeepService {
   cleanup(): void {
     if (!RNCallKeep) return;
 
-    try {
-      RNCallKeep.removeEventListener('answerCall');
-      RNCallKeep.removeEventListener('endCall');
-      RNCallKeep.removeEventListener('didPerformSetMutedCallAction');
-      RNCallKeep.removeEventListener('didPerformDTMFAction');
-      RNCallKeep.removeEventListener('didToggleHoldCallAction');
-      if (Platform.OS === 'ios') {
-        RNCallKeep.removeEventListener('didActivateAudioSession');
+    // Remove each listener individually to ensure all are attempted even if one fails
+    const listeners = [
+      'answerCall',
+      'endCall',
+      'didPerformSetMutedCallAction',
+      'didPerformDTMFAction',
+      'didToggleHoldCallAction',
+    ];
+
+    // Add iOS-specific listener
+    if (Platform.OS === 'ios') {
+      listeners.push('didActivateAudioSession');
+    }
+
+    for (const listener of listeners) {
+      try {
+        RNCallKeep.removeEventListener(listener);
+      } catch (error) {
+        console.warn(`[CallKeepService] Failed to remove listener ${listener}:`, error);
       }
-    } catch (error) {
-      console.error('[CallKeepService] Failed to cleanup:', error);
     }
   }
 }

@@ -188,7 +188,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         callKeepService.onEndCall = (callId) => {
           console.log('[AuthContext] CallKeep end call:', callId);
-          callService.endCall();
+          // Verify this is the current call before ending
+          const currentSession = callService.getCurrentSession();
+          if (currentSession && currentSession.callId === callId) {
+            callService.endCall();
+          } else {
+            console.log('[AuthContext] Ignoring CallKeep end for different/stale call:', callId);
+          }
         };
         } catch (callKeepError) {
           console.error('[AuthContext] Failed to set up CallKeep handlers:', callKeepError);

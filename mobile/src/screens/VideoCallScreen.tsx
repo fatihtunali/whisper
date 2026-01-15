@@ -141,6 +141,12 @@ export default function VideoCallScreen() {
       callService.setRemoteStreamHandler(null);
       setLocalStream(null);
       setRemoteStream(null);
+      // End call on unmount if still active (e.g., user navigated away forcefully)
+      const session = callService.getCurrentSession();
+      if (session && session.state !== 'ended') {
+        console.log('[VideoCallScreen] Ending call on unmount - session still active');
+        callService.endCall();
+      }
     };
   }, []);
 
