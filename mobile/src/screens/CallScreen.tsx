@@ -9,6 +9,7 @@ import {
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList, Contact, CallState } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { callService } from '../services/CallService';
@@ -203,7 +204,11 @@ export default function CallScreen() {
               style={[styles.controlButton, isMuted && styles.controlButtonActive]}
               onPress={handleToggleMute}
             >
-              <Text style={styles.controlIcon}>{isMuted ? '\uD83D\uDD07' : '\uD83D\uDD0A'}</Text>
+              <Ionicons
+                name={isMuted ? 'mic-off' : 'mic'}
+                size={moderateScale(24)}
+                color={colors.text}
+              />
               <Text style={styles.controlLabel}>{isMuted ? 'Unmute' : 'Mute'}</Text>
             </TouchableOpacity>
 
@@ -211,7 +216,11 @@ export default function CallScreen() {
               style={[styles.controlButton, isSpeakerOn && styles.controlButtonActive]}
               onPress={handleToggleSpeaker}
             >
-              <Text style={styles.controlIcon}>{isSpeakerOn ? '\uD83D\uDD08' : '\uD83D\uDCF1'}</Text>
+              <Ionicons
+                name={isSpeakerOn ? 'volume-high' : 'phone-portrait'}
+                size={moderateScale(24)}
+                color={colors.text}
+              />
               <Text style={styles.controlLabel}>{isSpeakerOn ? 'Speaker' : 'Phone'}</Text>
             </TouchableOpacity>
           </View>
@@ -226,13 +235,13 @@ export default function CallScreen() {
                 style={[styles.callButton, styles.declineButton]}
                 onPress={handleDecline}
               >
-                <Text style={styles.callButtonIcon}>{'\uD83D\uDCF5'}</Text>
+                <Ionicons name="call" size={moderateScale(28)} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.callButton, styles.acceptButton]}
                 onPress={handleAccept}
               >
-                <Text style={styles.callButtonIcon}>{'\uD83D\uDCDE'}</Text>
+                <Ionicons name="call" size={moderateScale(28)} color="#fff" />
               </TouchableOpacity>
             </>
           ) : (
@@ -241,7 +250,7 @@ export default function CallScreen() {
               style={[styles.callButton, styles.endCallButton]}
               onPress={handleEndCall}
             >
-              <Text style={styles.callButtonIcon}>{'\uD83D\uDCF5'}</Text>
+              <Ionicons name="call" size={moderateScale(28)} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
             </TouchableOpacity>
           )}
         </View>
@@ -249,7 +258,7 @@ export default function CallScreen() {
 
       {/* Encryption indicator */}
       <View style={styles.encryptionBadge}>
-        <Text style={styles.encryptionIcon}>{'\uD83D\uDD12'}</Text>
+        <Ionicons name="lock-closed" size={moderateScale(14)} color={colors.textMuted} style={{ marginRight: spacing.xs }} />
         <Text style={styles.encryptionText}>End-to-end encrypted</Text>
       </View>
     </View>
@@ -316,13 +325,10 @@ const styles = StyleSheet.create({
   controlButtonActive: {
     backgroundColor: colors.primary,
   },
-  controlIcon: {
-    fontSize: moderateScale(24),
-    marginBottom: spacing.xs,
-  },
   controlLabel: {
     fontSize: fontSize.xs,
     color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
   primaryControls: {
     flexDirection: 'row',
@@ -345,18 +351,11 @@ const styles = StyleSheet.create({
   endCallButton: {
     backgroundColor: colors.error,
   },
-  callButtonIcon: {
-    fontSize: moderateScale(28),
-  },
   encryptionBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingVertical: spacing.md,
     opacity: 0.6,
-  },
-  encryptionIcon: {
-    fontSize: fontSize.sm,
-    marginRight: spacing.xs,
   },
   encryptionText: {
     fontSize: fontSize.sm,

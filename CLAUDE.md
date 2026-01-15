@@ -185,6 +185,29 @@ npm run build
 pm2 restart sarjmobile  # or restart by finding process on port 3021
 ```
 
+## Build Version Management
+
+**IMPORTANT**: Always increment build numbers when making changes to the mobile app.
+
+- **iOS**: `buildNumber` in `mobile/app.json` under `expo.ios`
+- **Android**: `versionCode` in `mobile/app.json` under `expo.android`
+
+Both should be incremented together (+1) whenever:
+- UI changes are made
+- Bug fixes are applied
+- New features are added
+- Any code changes that require a new build
+
+Current format in `mobile/app.json`:
+```json
+"ios": {
+  "buildNumber": "X"
+},
+"android": {
+  "versionCode": X
+}
+```
+
 ## Security Model
 
 The server has zero knowledge of message content:

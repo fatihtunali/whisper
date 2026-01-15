@@ -15,6 +15,7 @@ import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { RTCView, MediaStream } from 'react-native-webrtc';
+import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList, Contact, CallState } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { callService } from '../services/CallService';
@@ -369,84 +370,94 @@ export default function VideoCallScreen() {
           </View>
           {/* Encryption indicator */}
           <View style={styles.encryptionBadge}>
-            <Text style={styles.encryptionIcon}>&#128274;</Text>
+            <Ionicons name="lock-closed" size={moderateScale(12)} color={colors.success} style={{ marginRight: spacing.xs }} />
             <Text style={styles.encryptionText}>Encrypted</Text>
           </View>
         </View>
       )}
 
-      {/* Bottom Controls */}
-      {showControls && (
-        <View style={[styles.controlsContainer, { paddingBottom: insets.bottom + spacing.md }]}>
-          {callState === 'ringing' && isIncoming ? (
-            // Incoming call controls
-            <View style={styles.incomingControls}>
-              <TouchableOpacity
-                style={[styles.controlButton, styles.rejectButton]}
-                onPress={handleRejectCall}
-              >
-                <Text style={styles.controlIcon}>&#128308;</Text>
-                <Text style={styles.controlLabel}>Decline</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.controlButton, styles.acceptButton]}
-                onPress={handleAcceptCall}
-              >
-                <Text style={styles.controlIcon}>&#128249;</Text>
-                <Text style={styles.controlLabel}>Accept</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            // In-call controls
-            <View style={styles.callControls}>
-              {/* Mute Button */}
+      {/* Bottom Controls - Always visible for end/decline button */}
+      <View style={[styles.controlsContainer, { paddingBottom: insets.bottom + spacing.md }]}>
+        {callState === 'ringing' && isIncoming ? (
+          // Incoming call controls
+          <View style={styles.incomingControls}>
+            <TouchableOpacity
+              style={[styles.controlButton, styles.rejectButton]}
+              onPress={handleRejectCall}
+            >
+              <Ionicons name="call" size={moderateScale(28)} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
+              <Text style={styles.controlLabel}>Decline</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.controlButton, styles.acceptButton]}
+              onPress={handleAcceptCall}
+            >
+              <Ionicons name="videocam" size={moderateScale(28)} color="#fff" />
+              <Text style={styles.controlLabel}>Accept</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          // In-call controls
+          <View style={styles.callControls}>
+            {/* Mute Button */}
+            {showControls && (
               <TouchableOpacity
                 style={[styles.controlButton, isMuted && styles.controlButtonActive]}
                 onPress={handleToggleMute}
               >
-                <Text style={styles.controlIcon}>
-                  {isMuted ? '&#128263;' : '&#127908;'}
-                </Text>
+                <Ionicons
+                  name={isMuted ? 'mic-off' : 'mic'}
+                  size={moderateScale(24)}
+                  color="#fff"
+                />
                 <Text style={styles.controlLabel}>{isMuted ? 'Unmute' : 'Mute'}</Text>
               </TouchableOpacity>
+            )}
 
-              {/* Toggle Camera Button */}
+            {/* Toggle Camera Button */}
+            {showControls && (
               <TouchableOpacity
                 style={[styles.controlButton, !isCameraOn && styles.controlButtonActive]}
                 onPress={handleToggleCamera}
               >
-                <Text style={styles.controlIcon}>
-                  {isCameraOn ? '&#128249;' : '&#128683;'}
-                </Text>
+                <Ionicons
+                  name={isCameraOn ? 'videocam' : 'videocam-off'}
+                  size={moderateScale(24)}
+                  color="#fff"
+                />
                 <Text style={styles.controlLabel}>{isCameraOn ? 'Camera Off' : 'Camera On'}</Text>
               </TouchableOpacity>
+            )}
 
-              {/* Switch Camera Button */}
+            {/* Switch Camera Button */}
+            {showControls && (
               <TouchableOpacity
-                style={styles.controlButton}
+                style={[styles.controlButton, !isCameraOn && styles.controlButtonDisabled]}
                 onPress={handleSwitchCamera}
                 disabled={!isCameraOn}
               >
-                <Text style={[styles.controlIcon, !isCameraOn && styles.controlIconDisabled]}>
-                  &#128260;
-                </Text>
+                <Ionicons
+                  name="camera-reverse"
+                  size={moderateScale(24)}
+                  color={isCameraOn ? '#fff' : 'rgba(255,255,255,0.5)'}
+                />
                 <Text style={[styles.controlLabel, !isCameraOn && styles.controlLabelDisabled]}>
                   Flip
                 </Text>
               </TouchableOpacity>
+            )}
 
-              {/* End Call Button */}
-              <TouchableOpacity
-                style={[styles.controlButton, styles.endCallButton]}
-                onPress={handleEndCall}
-              >
-                <Text style={styles.controlIcon}>&#128308;</Text>
-                <Text style={styles.controlLabel}>End</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      )}
+            {/* End Call Button - Always visible */}
+            <TouchableOpacity
+              style={[styles.controlButton, styles.endCallButton]}
+              onPress={handleEndCall}
+            >
+              <Ionicons name="call" size={moderateScale(28)} color="#fff" style={{ transform: [{ rotate: '135deg' }] }} />
+              <Text style={styles.controlLabel}>End</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -561,10 +572,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: borderRadius.sm,
   },
-  encryptionIcon: {
-    fontSize: fontSize.sm,
-    marginRight: spacing.xs,
-  },
   encryptionText: {
     fontSize: fontSize.xs,
     color: colors.success,
@@ -599,16 +606,13 @@ const styles = StyleSheet.create({
   controlButtonActive: {
     backgroundColor: 'rgba(255, 255, 255, 0.3)',
   },
-  controlIcon: {
-    fontSize: fontSize.xxl,
-    marginBottom: spacing.xs,
-  },
-  controlIconDisabled: {
-    opacity: 0.5,
+  controlButtonDisabled: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
   },
   controlLabel: {
     fontSize: fontSize.xs,
     color: colors.text,
+    marginTop: spacing.xs,
   },
   controlLabelDisabled: {
     opacity: 0.5,
