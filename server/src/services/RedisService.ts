@@ -23,6 +23,10 @@ const KEYS = {
   VOIP_TOKEN: 'whisper:voip:',         // whisper:voip:{whisperId} -> voipToken
   LAST_SEEN: 'whisper:lastseen:',      // whisper:lastseen:{whisperId} -> timestamp
   PUBLIC_KEY: 'whisper:pubkey:',       // whisper:pubkey:{whisperId} -> publicKey
+  SIGNING_KEY: 'whisper:signkey:',     // whisper:signkey:{whisperId} -> signingPublicKey
+  // Message queue keys
+  MSG_QUEUE: 'whisper:queue:',         // whisper:queue:{whisperId} -> set of message IDs
+  MSG_DATA: 'whisper:msg:',            // whisper:msg:{messageId} -> JSON message data
 };
 
 // Pub/Sub channels
@@ -267,14 +271,75 @@ class RedisService {
     return this.client.get(KEYS.VOIP_TOKEN + whisperId);
   }
 
+  /**
+   * Remove push token
+   */
+  async removePushToken(whisperId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del(KEYS.PUSH_TOKEN + whisperId);
+    await this.client.del(KEYS.VOIP_TOKEN + whisperId);
+  }
+
+  /**
+   * Get all push tokens
+   */
+  async getAllPushTokens(): Promise<Map<string, string>> {
+    const tokens = new Map<string, string>();
+    if (!this.client) return tokens;
+
+    try {
+      const keys = await this.client.keys(KEYS.PUSH_TOKEN + '*');
+      if (keys.length > 0) {
+        const values = await this.client.mget(...keys);
+        keys.forEach((key, index) => {
+          const whisperId = key.replace(KEYS.PUSH_TOKEN, '');
+          const token = values[index];
+          if (token) {
+            tokens.set(whisperId, token);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('[RedisService] Failed to get all push tokens:', error);
+    }
+
+    return tokens;
+  }
+
+  /**
+   * Get all VoIP tokens
+   */
+  async getAllVoIPTokens(): Promise<Map<string, string>> {
+    const tokens = new Map<string, string>();
+    if (!this.client) return tokens;
+
+    try {
+      const keys = await this.client.keys(KEYS.VOIP_TOKEN + '*');
+      if (keys.length > 0) {
+        const values = await this.client.mget(...keys);
+        keys.forEach((key, index) => {
+          const whisperId = key.replace(KEYS.VOIP_TOKEN, '');
+          const token = values[index];
+          if (token) {
+            tokens.set(whisperId, token);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('[RedisService] Failed to get all VoIP tokens:', error);
+    }
+
+    return tokens;
+  }
+
   // ==================== PUBLIC KEYS ====================
 
   /**
-   * Store public key (cache from MySQL)
+   * Store public key (permanent - no TTL)
    */
-  async setPublicKey(whisperId: string, publicKey: string, ttl: number = 86400): Promise<void> {
+  async setPublicKey(whisperId: string, publicKey: string): Promise<void> {
     if (!this.client) return;
-    await this.client.setex(KEYS.PUBLIC_KEY + whisperId, ttl, publicKey);
+    await this.client.set(KEYS.PUBLIC_KEY + whisperId, publicKey);
   }
 
   /**
@@ -283,6 +348,320 @@ class RedisService {
   async getPublicKey(whisperId: string): Promise<string | null> {
     if (!this.client) return null;
     return this.client.get(KEYS.PUBLIC_KEY + whisperId);
+  }
+
+  /**
+   * Store signing public key (permanent - no TTL)
+   */
+  async setSigningKey(whisperId: string, signingKey: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.set(KEYS.SIGNING_KEY + whisperId, signingKey);
+  }
+
+  /**
+   * Get signing public key
+   */
+  async getSigningKey(whisperId: string): Promise<string | null> {
+    if (!this.client) return null;
+    return this.client.get(KEYS.SIGNING_KEY + whisperId);
+  }
+
+  /**
+   * Check if user exists (has public key stored)
+   */
+  async userExists(whisperId: string): Promise<boolean> {
+    if (!this.client) return false;
+    const result = await this.client.exists(KEYS.PUBLIC_KEY + whisperId);
+    return result === 1;
+  }
+
+  // ==================== MESSAGE QUEUE ====================
+
+  /**
+   * Store message data with TTL
+   */
+  async setMessage(messageId: string, data: string, ttlSeconds: number): Promise<void> {
+    if (!this.client) return;
+    await this.client.setex(KEYS.MSG_DATA + messageId, ttlSeconds, data);
+  }
+
+  /**
+   * Get message data
+   */
+  async getMessage(messageId: string): Promise<string | null> {
+    if (!this.client) return null;
+    return this.client.get(KEYS.MSG_DATA + messageId);
+  }
+
+  /**
+   * Delete message data
+   */
+  async deleteMessage(messageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del(KEYS.MSG_DATA + messageId);
+  }
+
+  /**
+   * Add message ID to user's queue
+   */
+  async addToQueue(whisperId: string, messageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.sadd(KEYS.MSG_QUEUE + whisperId, messageId);
+  }
+
+  /**
+   * Get all message IDs in user's queue
+   */
+  async getQueueMessages(whisperId: string): Promise<string[]> {
+    if (!this.client) return [];
+    return this.client.smembers(KEYS.MSG_QUEUE + whisperId);
+  }
+
+  /**
+   * Remove message ID from user's queue
+   */
+  async removeFromQueue(whisperId: string, messageId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.srem(KEYS.MSG_QUEUE + whisperId, messageId);
+  }
+
+  /**
+   * Clear user's entire queue
+   */
+  async clearQueue(whisperId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del(KEYS.MSG_QUEUE + whisperId);
+  }
+
+  /**
+   * Get queue length for user
+   */
+  async getQueueLength(whisperId: string): Promise<number> {
+    if (!this.client) return 0;
+    return this.client.scard(KEYS.MSG_QUEUE + whisperId);
+  }
+
+  /**
+   * Get total queued messages count
+   */
+  async getTotalQueuedMessages(): Promise<number> {
+    if (!this.client) return 0;
+    const keys = await this.client.keys(KEYS.MSG_DATA + '*');
+    return keys.length;
+  }
+
+  /**
+   * Get queue statistics
+   */
+  async getQueueStats(): Promise<{ users: number; messages: number }> {
+    if (!this.client) return { users: 0, messages: 0 };
+
+    try {
+      const queueKeys = await this.client.keys(KEYS.MSG_QUEUE + '*');
+      const msgKeys = await this.client.keys(KEYS.MSG_DATA + '*');
+
+      return {
+        users: queueKeys.length,
+        messages: msgKeys.length,
+      };
+    } catch (error) {
+      console.error('[RedisService] Failed to get queue stats:', error);
+      return { users: 0, messages: 0 };
+    }
+  }
+
+  /**
+   * Cleanup expired queue entries (remove message IDs that no longer have data)
+   */
+  async cleanupExpiredQueues(): Promise<number> {
+    if (!this.client) return 0;
+    let cleaned = 0;
+
+    try {
+      const queueKeys = await this.client.keys(KEYS.MSG_QUEUE + '*');
+
+      for (const queueKey of queueKeys) {
+        const messageIds = await this.client.smembers(queueKey);
+
+        for (const msgId of messageIds) {
+          // Check if message data still exists
+          const exists = await this.client.exists(KEYS.MSG_DATA + msgId);
+          if (!exists) {
+            // Message expired, remove from queue
+            await this.client.srem(queueKey, msgId);
+            cleaned++;
+          }
+        }
+
+        // If queue is empty, delete it
+        const remaining = await this.client.scard(queueKey);
+        if (remaining === 0) {
+          await this.client.del(queueKey);
+        }
+      }
+    } catch (error) {
+      console.error('[RedisService] Failed to cleanup expired queues:', error);
+    }
+
+    return cleaned;
+  }
+
+  // ==================== GROUPS ====================
+
+  /**
+   * Store group data
+   */
+  async setGroupData(groupId: string, data: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.set('whisper:group:' + groupId, data);
+  }
+
+  /**
+   * Get group data
+   */
+  async getGroupData(groupId: string): Promise<string | null> {
+    if (!this.client) return null;
+    return this.client.get('whisper:group:' + groupId);
+  }
+
+  /**
+   * Delete group data
+   */
+  async deleteGroupData(groupId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del('whisper:group:' + groupId);
+  }
+
+  /**
+   * Check if group exists
+   */
+  async groupExists(groupId: string): Promise<boolean> {
+    if (!this.client) return false;
+    const result = await this.client.exists('whisper:group:' + groupId);
+    return result === 1;
+  }
+
+  /**
+   * Add member to group
+   */
+  async addGroupMember(groupId: string, whisperId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.sadd('whisper:gmembers:' + groupId, whisperId);
+  }
+
+  /**
+   * Remove member from group
+   */
+  async removeGroupMember(groupId: string, whisperId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.srem('whisper:gmembers:' + groupId, whisperId);
+  }
+
+  /**
+   * Get all group members
+   */
+  async getGroupMembers(groupId: string): Promise<string[]> {
+    if (!this.client) return [];
+    return this.client.smembers('whisper:gmembers:' + groupId);
+  }
+
+  /**
+   * Delete all group members
+   */
+  async deleteGroupMembers(groupId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del('whisper:gmembers:' + groupId);
+  }
+
+  /**
+   * Check if user is group member
+   */
+  async isGroupMember(groupId: string, whisperId: string): Promise<boolean> {
+    if (!this.client) return false;
+    const result = await this.client.sismember('whisper:gmembers:' + groupId, whisperId);
+    return result === 1;
+  }
+
+  /**
+   * Add group to user's group list
+   */
+  async addUserGroup(whisperId: string, groupId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.sadd('whisper:ugroups:' + whisperId, groupId);
+  }
+
+  /**
+   * Remove group from user's group list
+   */
+  async removeUserGroup(whisperId: string, groupId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.srem('whisper:ugroups:' + whisperId, groupId);
+  }
+
+  /**
+   * Get all groups for user
+   */
+  async getUserGroups(whisperId: string): Promise<string[]> {
+    if (!this.client) return [];
+    return this.client.smembers('whisper:ugroups:' + whisperId);
+  }
+
+  /**
+   * Clear all user's groups
+   */
+  async clearUserGroups(whisperId: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.del('whisper:ugroups:' + whisperId);
+  }
+
+  /**
+   * Store pending group invite
+   */
+  async setPendingInvite(whisperId: string, groupId: string, data: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.set('whisper:ginvite:' + whisperId + ':' + groupId, data);
+    await this.client.sadd('whisper:uinvites:' + whisperId, groupId);
+  }
+
+  /**
+   * Get all pending invites for user
+   */
+  async getPendingInvites(whisperId: string): Promise<string[]> {
+    if (!this.client) return [];
+    const groupIds = await this.client.smembers('whisper:uinvites:' + whisperId);
+    const invites: string[] = [];
+
+    for (const groupId of groupIds) {
+      const data = await this.client.get('whisper:ginvite:' + whisperId + ':' + groupId);
+      if (data) {
+        invites.push(data);
+      }
+    }
+
+    return invites;
+  }
+
+  /**
+   * Clear all pending invites for user
+   */
+  async clearPendingInvites(whisperId: string): Promise<void> {
+    if (!this.client) return;
+    const groupIds = await this.client.smembers('whisper:uinvites:' + whisperId);
+
+    for (const groupId of groupIds) {
+      await this.client.del('whisper:ginvite:' + whisperId + ':' + groupId);
+    }
+
+    await this.client.del('whisper:uinvites:' + whisperId);
+  }
+
+  /**
+   * Get total group count
+   */
+  async getGroupCount(): Promise<number> {
+    if (!this.client) return 0;
+    const keys = await this.client.keys('whisper:group:*');
+    return keys.length;
   }
 
   // ==================== PUB/SUB ====================

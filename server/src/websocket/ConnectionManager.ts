@@ -95,20 +95,20 @@ class ConnectionManager {
       await redisService.setPublicKey(whisperId, publicKey);
     }
 
-    // Store public keys persistently in MySQL
-    publicKeyStore.store(whisperId, publicKey, signingPublicKey);
+    // Store public keys persistently in Redis
+    await publicKeyStore.store(whisperId, publicKey, signingPublicKey);
 
-    // Store push token in MySQL (persistent backup)
+    // Store push token in Redis
     if (pushToken) {
       pushTokenStore.store(whisperId, pushToken, platform || 'unknown').catch(err =>
-        console.error(`[ConnectionManager] Failed to persist push token:`, err)
+        console.error(`[ConnectionManager] Failed to store push token:`, err)
       );
     }
 
-    // Store VoIP token in MySQL
+    // Store VoIP token in Redis
     if (voipToken) {
       pushTokenStore.storeVoIPToken(whisperId, voipToken).catch(err =>
-        console.error(`[ConnectionManager] Failed to persist VoIP token:`, err)
+        console.error(`[ConnectionManager] Failed to store VoIP token:`, err)
       );
     }
 
@@ -291,12 +291,12 @@ class ConnectionManager {
       if (key) return key;
     }
 
-    // Fall back to MySQL
+    // Fall back to Redis persistent store
     return publicKeyStore.getPublicKey(whisperId);
   }
 
   // Check if a user exists in the system (has ever connected)
-  userExists(whisperId: string): boolean {
+  async userExists(whisperId: string): Promise<boolean> {
     return publicKeyStore.exists(whisperId);
   }
 

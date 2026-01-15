@@ -1278,7 +1278,7 @@ export class WebSocketServer {
 
     // Check if user exists and get their public key
     const publicKey = await connectionManager.getPublicKey(whisperId);
-    const exists = connectionManager.userExists(whisperId);
+    const exists = await connectionManager.userExists(whisperId);
 
     // Send response
     const response: PublicKeyResponseMessage = {
