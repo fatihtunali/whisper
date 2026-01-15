@@ -197,8 +197,21 @@ class MessagingService {
 
   // Set platform (call before connect)
   setPlatform(platform: 'ios' | 'android' | 'unknown'): void {
+    const wasUnknown = this.platform === 'unknown';
     this.platform = platform;
     console.log('[MessagingService] Platform set:', platform);
+
+    // Re-register if we were unknown and now have real platform AND connected
+    // This ensures server gets correct platform even if set after initial connect
+    if (wasUnknown && platform !== 'unknown' && this.isConnected()) {
+      if (this.isRegistering) {
+        console.log('[MessagingService] Platform updated during registration, will re-register after');
+        this.needsReregistration = true;
+      } else {
+        console.log('[MessagingService] Re-registering with correct platform');
+        this.register();
+      }
+    }
   }
 
   // Connect to WebSocket server

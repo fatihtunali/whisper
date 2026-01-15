@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { Platform } from 'react-native';
 import { LocalUser } from '../types';
 import { secureStorage } from '../storage/SecureStorage';
 import { cryptoService } from '../crypto/CryptoService';
@@ -44,6 +45,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (user) {
       const initializeAndConnect = async () => {
+        // CRITICAL: Set platform BEFORE connecting so registration includes correct platform
+        messagingService.setPlatform(Platform.OS as 'ios' | 'android' | 'unknown');
+        console.log('[AuthContext] Platform set to:', Platform.OS);
+
         // IMPORTANT: Connect to WebSocket IMMEDIATELY so user is online right away
         // Don't wait for push notifications to initialize
         console.log('[AuthContext] Connecting to messaging service...');
