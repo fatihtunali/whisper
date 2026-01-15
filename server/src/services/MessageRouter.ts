@@ -47,7 +47,7 @@ class MessageRouter {
     const recipientSocket = connectionManager.getSocket(toWhisperId);
 
     // Get sender's public key for recipients who don't have sender in contacts
-    const senderPublicKey = connectionManager.getPublicKey(fromWhisperId) || undefined;
+    const senderPublicKey = await connectionManager.getPublicKey(fromWhisperId) || undefined;
 
     if (recipientSocket) {
       // Recipient is online - deliver immediately with all media attachments
@@ -76,7 +76,7 @@ class MessageRouter {
         console.log(`[MessageRouter] Delivered ${messageId} from ${fromWhisperId} to ${toWhisperId}`);
 
         // Also send push notification to wake up app if in background
-        const pushToken = connectionManager.getPushToken(toWhisperId);
+        const pushToken = await connectionManager.getPushToken(toWhisperId);
         if (pushToken) {
           pushService.sendMessageNotification(pushToken, fromWhisperId)
             .catch(err => console.error('[MessageRouter] Push notification failed:', err));
@@ -91,7 +91,7 @@ class MessageRouter {
     console.log(`[MessageRouter] Queued ${messageId} for offline user ${toWhisperId}`);
 
     // Send push notification if recipient has a push token
-    const pushToken = connectionManager.getPushToken(toWhisperId);
+    const pushToken = await connectionManager.getPushToken(toWhisperId);
     if (pushToken) {
       pushService.sendMessageNotification(pushToken, fromWhisperId)
         .catch(err => console.error('[MessageRouter] Push notification failed:', err));

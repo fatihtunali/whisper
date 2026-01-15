@@ -69,8 +69,13 @@ app.get('/health', (_req, res) => {
 // Stats endpoint
 app.get('/stats', async (_req, res) => {
   const stats = wsServer ? await wsServer.getStats() : { connections: 0, pendingMessages: { users: 0, messages: 0 } };
+  const redisInfo = await connectionManager.getRedisInfo();
   res.json({
     ...stats,
+    redis: connectionManager.isRedisEnabled() ? {
+      enabled: true,
+      ...redisInfo,
+    } : { enabled: false },
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
   });

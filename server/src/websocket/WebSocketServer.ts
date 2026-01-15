@@ -59,7 +59,7 @@ export class WebSocketServer {
         this.handleMessage(socket, data);
       });
 
-      socket.on('close', () => {
+      socket.on('close', async () => {
         const sid = this.socketIds.get(socket);
         this.socketIds.delete(socket);
 
@@ -68,20 +68,20 @@ export class WebSocketServer {
           authService.removePendingChallenge(sid);
         }
 
-        const whisperId = connectionManager.unregisterBySocket(socket);
+        const whisperId = await connectionManager.unregisterBySocket(socket);
         if (whisperId) {
           console.log(`[WebSocket] Disconnected: ${whisperId}`);
         }
       });
 
-      socket.on('error', (error: Error) => {
+      socket.on('error', async (error: Error) => {
         console.error('[WebSocket] Socket error:', error);
         const sid = this.socketIds.get(socket);
         this.socketIds.delete(socket);
         if (sid) {
           authService.removePendingChallenge(sid);
         }
-        connectionManager.unregisterBySocket(socket);
+        await connectionManager.unregisterBySocket(socket);
       });
     });
   }
@@ -291,7 +291,7 @@ export class WebSocketServer {
     // Authentication successful - register the client
     const { whisperId, publicKey, signingPublicKey, pushToken, voipToken, platform, prefs } = result.data;
 
-    connectionManager.register(whisperId, publicKey, signingPublicKey, socket, pushToken, prefs, voipToken, platform);
+    await connectionManager.register(whisperId, publicKey, signingPublicKey, socket, pushToken, prefs, voipToken, platform);
 
     // Send acknowledgment
     const ack: RegisterAckMessage = {
@@ -475,10 +475,10 @@ export class WebSocketServer {
     console.log(`[WebSocket] Sent ${result.messages.length} pending messages to ${client.whisperId}${result.hasMore ? ' (more available)' : ''}`);
   }
 
-  private handlePing(socket: WebSocket): void {
+  private async handlePing(socket: WebSocket): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (client) {
-      connectionManager.updatePing(client.whisperId);
+      await connectionManager.updatePing(client.whisperId);
     }
 
     const pong: PongMessage = {
@@ -763,7 +763,7 @@ export class WebSocketServer {
     await groupStore.clearUserGroups(whisperId);
 
     // Unregister from connection manager
-    connectionManager.unregister(whisperId);
+    await connectionManager.unregister(whisperId);
 
     // 5. Send confirmation
     const accountDeletedMsg: AccountDeletedMessage = {
@@ -836,8 +836,8 @@ export class WebSocketServer {
       console.log(`[WebSocket] ${isVideo ? 'Video' : 'Voice'} call initiated from ${client.whisperId} to ${toWhisperId}`);
     } else {
       // Recipient offline - try VoIP push for iOS to ring the phone
-      const voipToken = connectionManager.getVoIPToken(toWhisperId);
-      const pushToken = connectionManager.getPushToken(toWhisperId);
+      const voipToken = await connectionManager.getVoIPToken(toWhisperId);
+      const pushToken = await connectionManager.getPushToken(toWhisperId);
 
       if (voipToken) {
         // Send VoIP push to make iOS phone ring
@@ -1033,7 +1033,7 @@ export class WebSocketServer {
         });
 
         // Send push notification
-        const pushToken = connectionManager.getPushToken(memberId);
+        const pushToken = await connectionManager.getPushToken(memberId);
         if (pushToken) {
           pushService.sendNotification(
             pushToken,
@@ -1252,10 +1252,10 @@ export class WebSocketServer {
   }
 
   // Public key lookup handler - for message requests
-  private handleLookupPublicKey(
+  private async handleLookupPublicKey(
     socket: WebSocket,
     payload: { whisperId: string }
-  ): void {
+  ): Promise<void> {
     const client = connectionManager.getBySocket(socket);
     if (!client) {
       this.sendError(socket, 'NOT_REGISTERED', 'You must register first');
@@ -1277,7 +1277,7 @@ export class WebSocketServer {
     }
 
     // Check if user exists and get their public key
-    const publicKey = connectionManager.getPublicKey(whisperId);
+    const publicKey = await connectionManager.getPublicKey(whisperId);
     const exists = connectionManager.userExists(whisperId);
 
     // Send response
@@ -1330,7 +1330,7 @@ export class WebSocketServer {
   private startCleanupInterval(): void {
     // Run cleanup every minute
     this.cleanupInterval = setInterval(async () => {
-      connectionManager.cleanupStale();
+      await connectionManager.cleanupStale();
       await messageQueue.cleanupExpired();
     }, 60 * 1000);
   }
