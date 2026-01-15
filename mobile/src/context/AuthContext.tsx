@@ -44,10 +44,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (user) {
       const initializeAndConnect = async () => {
-        // Initialize push notifications
+        // IMPORTANT: Connect to WebSocket IMMEDIATELY so user is online right away
+        // Don't wait for push notifications to initialize
+        console.log('[AuthContext] Connecting to messaging service...');
+        messagingService.connect(user);
+
+        // Initialize push notifications in parallel (don't block connection)
         console.log('[AuthContext] Initializing push notifications...');
-        const pushToken = await notificationService.initialize();
-        messagingService.setPushToken(pushToken);
+        notificationService.initialize().then((pushToken) => {
+          if (pushToken) {
+            messagingService.setPushToken(pushToken);
+            // Re-register with push token if already connected
+            if (messagingService.isConnected()) {
+              (messagingService as any).register();
+            }
+          }
+        }).catch((err) => {
+          console.warn('[AuthContext] Push notification init failed:', err);
+        });
 
         // Set up notification listeners
         notificationService.setupListeners(
@@ -176,10 +190,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }, 100);
         };
-
-        // Connect to messaging service
-        console.log('[AuthContext] Connecting to messaging service...');
-        messagingService.connect(user);
       };
 
       initializeAndConnect();

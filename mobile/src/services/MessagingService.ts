@@ -4,7 +4,8 @@ import { secureStorage } from '../storage/SecureStorage';
 import { generateId, generateGroupId } from '../utils/helpers';
 
 const WS_URL = 'wss://sarjmobile.com/ws';
-const RECONNECT_DELAY = 3000;
+const INITIAL_RECONNECT_DELAY = 1000; // Start with 1 second
+const MAX_RECONNECT_DELAY = 30000; // Max 30 seconds
 const PING_INTERVAL = 15000; // Reduced from 30s to 15s to keep connection alive
 
 type MessageHandler = (message: Message, contact: Contact) => void;
@@ -31,6 +32,7 @@ class MessagingService {
   private reconnectTimeout: NodeJS.Timeout | null = null;
   private pingInterval: NodeJS.Timeout | null = null;
   private isConnecting = false;
+  private reconnectAttempts = 0; // For exponential backoff
 
   // Pending public key lookups - for async request/response
   private pendingLookups: Map<string, {
@@ -188,6 +190,7 @@ class MessagingService {
       this.ws.onopen = () => {
         console.log('[MessagingService] Connected');
         this.isConnecting = false;
+        this.reconnectAttempts = 0; // Reset on successful connection
         this.register();
         this.startPing();
         this.notifyConnectionHandlers(true);
@@ -1364,13 +1367,20 @@ class MessagingService {
   private scheduleReconnect(): void {
     if (this.reconnectTimeout || !this.user) return;
 
-    console.log('[MessagingService] Reconnecting in', RECONNECT_DELAY, 'ms');
+    // Exponential backoff: delay doubles with each attempt, up to max
+    const delay = Math.min(
+      INITIAL_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts),
+      MAX_RECONNECT_DELAY
+    );
+    this.reconnectAttempts++;
+
+    console.log('[MessagingService] Reconnecting in', delay, 'ms (attempt', this.reconnectAttempts + ')');
     this.reconnectTimeout = setTimeout(() => {
       this.reconnectTimeout = null;
       if (this.user) {
         this.connect(this.user);
       }
-    }, RECONNECT_DELAY);
+    }, delay);
   }
 
   // Private: Start ping interval
