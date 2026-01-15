@@ -3,16 +3,41 @@
  *
  * Handles VoIP push notifications for incoming calls on iOS
  * This allows the phone to ring even when the app is completely closed
+ *
+ * NOTE: This service requires native module configuration via Expo config plugins
+ * or manual native setup. It will gracefully degrade if the native module is unavailable.
  */
 
 import { Platform } from 'react-native';
 
 let VoipPushNotification: any = null;
+let voipPushAvailable: boolean | null = null;
+
+// Check if VoIP Push native module is available at runtime
+const checkVoIPPushAvailable = (): boolean => {
+  if (Platform.OS !== 'ios') return false;
+  if (voipPushAvailable !== null) return voipPushAvailable;
+
+  try {
+    // Check if the native module exists before attempting to use it
+    const { NativeModules } = require('react-native');
+    voipPushAvailable = !!(NativeModules.RNVoipPushNotificationManager);
+    if (!voipPushAvailable) {
+      console.log('[VoIPPushService] Native module not available - VoIP push features disabled');
+    }
+    return voipPushAvailable;
+  } catch (e) {
+    voipPushAvailable = false;
+    console.log('[VoIPPushService] Native module check failed - VoIP push features disabled');
+    return false;
+  }
+};
 
 type VoIPPushHandler = (notification: any) => void;
 
 class VoIPPushService {
   private initialized: boolean = false;
+  private initializationFailed: boolean = false;
   private voipToken: string | null = null;
 
   // Callback for when VoIP push is received
@@ -27,11 +52,24 @@ class VoIPPushService {
     }
 
     if (this.initialized) return true;
+    if (this.initializationFailed) return false;
+
+    // Check if native module is available before attempting initialization
+    if (!checkVoIPPushAvailable()) {
+      this.initializationFailed = true;
+      return false;
+    }
 
     try {
       // Dynamic import
       const VoipModule = await import('react-native-voip-push-notification');
       VoipPushNotification = VoipModule.default;
+
+      if (!VoipPushNotification || !VoipPushNotification.registerVoipToken) {
+        console.warn('[VoIPPushService] Module loaded but required functions not available');
+        this.initializationFailed = true;
+        return false;
+      }
 
       // Register for VoIP notifications
       VoipPushNotification.addEventListener('register', (token: string) => {
@@ -83,6 +121,8 @@ class VoIPPushService {
       return true;
     } catch (error) {
       console.warn('[VoIPPushService] Failed to initialize:', error);
+      this.initializationFailed = true;
+      VoipPushNotification = null;
       return false;
     }
   }

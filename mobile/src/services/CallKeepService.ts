@@ -4,10 +4,12 @@
  * Provides native phone call UI for incoming/outgoing calls
  * - iOS: Uses CallKit for system call UI
  * - Android: Uses ConnectionService for system call UI
+ *
+ * NOTE: This service requires native module configuration via Expo config plugins
+ * or manual native setup. It will gracefully degrade if the native module is unavailable.
  */
 
-import { Platform, AppState, AppStateStatus } from 'react-native';
-import { secureStorage } from '../storage/SecureStorage';
+import { Platform } from 'react-native';
 
 // CallKeep types
 interface CallKeepOptions {
@@ -31,9 +33,30 @@ interface CallKeepOptions {
 type CallKeepEventHandler = (...args: any[]) => void;
 
 let RNCallKeep: any = null;
+let callKeepAvailable: boolean | null = null;
+
+// Check if CallKeep native module is available at runtime
+const checkCallKeepAvailable = (): boolean => {
+  if (callKeepAvailable !== null) return callKeepAvailable;
+
+  try {
+    // Check if the native module exists before attempting to use it
+    const { NativeModules } = require('react-native');
+    callKeepAvailable = !!(NativeModules.RNCallKeep);
+    if (!callKeepAvailable) {
+      console.log('[CallKeepService] Native module not available - CallKeep features disabled');
+    }
+    return callKeepAvailable;
+  } catch (e) {
+    callKeepAvailable = false;
+    console.log('[CallKeepService] Native module check failed - CallKeep features disabled');
+    return false;
+  }
+};
 
 class CallKeepService {
   private initialized: boolean = false;
+  private initializationFailed: boolean = false;
   private activeCallId: string | null = null;
   private callHandlers: Map<string, CallKeepEventHandler> = new Map();
 
@@ -44,11 +67,24 @@ class CallKeepService {
 
   async initialize(): Promise<boolean> {
     if (this.initialized) return true;
+    if (this.initializationFailed) return false;
+
+    // Check if native module is available before attempting initialization
+    if (!checkCallKeepAvailable()) {
+      this.initializationFailed = true;
+      return false;
+    }
 
     try {
       // Dynamic import to handle cases where native module isn't available
       const CallKeepModule = await import('react-native-callkeep');
       RNCallKeep = CallKeepModule.default;
+
+      if (!RNCallKeep || !RNCallKeep.setup) {
+        console.warn('[CallKeepService] Module loaded but setup function not available');
+        this.initializationFailed = true;
+        return false;
+      }
 
       const options: CallKeepOptions = {
         ios: {
@@ -75,6 +111,8 @@ class CallKeepService {
       return true;
     } catch (error) {
       console.warn('[CallKeepService] Failed to initialize:', error);
+      this.initializationFailed = true;
+      RNCallKeep = null;
       return false;
     }
   }

@@ -83,22 +83,9 @@ export default function CallScreen() {
     };
   }, [navigation]);
 
-  // Handle incoming call handler for receiving offer
-  useEffect(() => {
-    const handleIncomingCall = (callId: string, fromWhisperId: string, isVideo: boolean) => {
-      // Get the pending offer from the call service's current session
-      const session = callService.getCurrentSession();
-      if (session && session.callId === callId) {
-        // Offer is handled internally by CallService
-      }
-    };
-
-    callService.setIncomingCallHandler(handleIncomingCall);
-
-    return () => {
-      callService.setIncomingCallHandler(null);
-    };
-  }, []);
+  // NOTE: Do not override the global incoming call handler set in AuthContext
+  // The global handler handles navigation. This screen is already displayed
+  // when we reach here, so we don't need a local handler.
 
   // Initiate outgoing call
   useEffect(() => {

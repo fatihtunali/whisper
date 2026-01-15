@@ -80,15 +80,23 @@ class NotificationService {
         });
       }
 
-      // Initialize CallKeep for native call UI
-      await callKeepService.initialize();
+      // Initialize CallKeep for native call UI (non-blocking, gracefully handles unavailability)
+      try {
+        await callKeepService.initialize();
+      } catch (e) {
+        console.warn('[NotificationService] CallKeep initialization failed (native module may not be available):', e);
+      }
 
       // Set platform on messaging service
       messagingService.setPlatform(Platform.OS as 'ios' | 'android' | 'unknown');
 
-      // Initialize VoIP push for iOS
+      // Initialize VoIP push for iOS (non-blocking, gracefully handles unavailability)
       if (Platform.OS === 'ios') {
-        await voipPushService.initialize();
+        try {
+          await voipPushService.initialize();
+        } catch (e) {
+          console.warn('[NotificationService] VoIP push initialization failed (native module may not be available):', e);
+        }
 
         // Handle VoIP push received
         voipPushService.onNotification = (notification) => {

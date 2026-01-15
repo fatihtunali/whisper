@@ -5,14 +5,51 @@ import { callKeepService } from './CallKeepService';
 
 // InCallManager for audio routing (speaker, proximity sensor, etc.)
 let InCallManager: any = null;
+let inCallManagerAvailable: boolean | null = null;
+let inCallManagerLoadAttempted: boolean = false;
+
+// Check if InCallManager native module is available at runtime
+const checkInCallManagerAvailable = (): boolean => {
+  if (inCallManagerAvailable !== null) return inCallManagerAvailable;
+
+  try {
+    // Check if the native module exists before attempting to use it
+    const { NativeModules } = require('react-native');
+    inCallManagerAvailable = !!(NativeModules.InCallManager);
+    if (!inCallManagerAvailable) {
+      console.log('[CallService] InCallManager native module not available - audio features limited');
+    }
+    return inCallManagerAvailable;
+  } catch (e) {
+    inCallManagerAvailable = false;
+    console.log('[CallService] InCallManager native module check failed');
+    return false;
+  }
+};
+
 const loadInCallManager = async () => {
   if (InCallManager) return InCallManager;
+  if (inCallManagerLoadAttempted && !InCallManager) return null;
+
+  // Check availability before loading
+  if (!checkInCallManagerAvailable()) {
+    inCallManagerLoadAttempted = true;
+    return null;
+  }
+
   try {
+    inCallManagerLoadAttempted = true;
     const module = await import('react-native-incall-manager');
     InCallManager = module.default;
+    if (!InCallManager || !InCallManager.start) {
+      console.warn('[CallService] InCallManager module loaded but required functions not available');
+      InCallManager = null;
+      return null;
+    }
     return InCallManager;
   } catch (e) {
     console.warn('[CallService] InCallManager not available:', e);
+    InCallManager = null;
     return null;
   }
 };
@@ -236,27 +273,37 @@ class CallService {
 
     try {
       // Initialize local media
+      console.log('[CallService] Initializing media for', isVideo ? 'video' : 'audio', 'call');
       await this.initializeMedia(isVideo);
+      console.log('[CallService] Media initialized successfully');
 
       // Create peer connection
+      console.log('[CallService] Creating peer connection');
       await this.createPeerConnection();
+      console.log('[CallService] Peer connection created');
 
       // Add local tracks to peer connection
       if (this.localStream && this.peerConnection) {
-        this.localStream.getTracks().forEach(track => {
+        const tracks = this.localStream.getTracks();
+        console.log('[CallService] Adding', tracks.length, 'local tracks to peer connection');
+        tracks.forEach(track => {
           this.peerConnection!.addTrack(track, this.localStream!);
         });
       }
 
       // Create offer
+      console.log('[CallService] Creating SDP offer');
       const offer = await this.peerConnection!.createOffer({
         offerToReceiveAudio: true,
         offerToReceiveVideo: isVideo,
       });
+      console.log('[CallService] SDP offer created');
 
       await this.peerConnection!.setLocalDescription(offer);
+      console.log('[CallService] Local description set');
 
       // Send call offer via signaling (include isVideo flag)
+      console.log('[CallService] Sending call_offer to', contact.whisperId);
       this.sendSignalingMessage(contact.whisperId, {
         type: 'call_offer',
         callId,
@@ -315,32 +362,44 @@ class CallService {
 
     try {
       // Initialize local media
+      console.log('[CallService] Accepting call - initializing media for', isVideo ? 'video' : 'audio');
       await this.initializeMedia(isVideo);
+      console.log('[CallService] Media initialized for accepting call');
 
       // Create peer connection
+      console.log('[CallService] Creating peer connection for incoming call');
       await this.createPeerConnection();
+      console.log('[CallService] Peer connection created');
 
       // Add local tracks
       if (this.localStream && this.peerConnection) {
-        this.localStream.getTracks().forEach(track => {
+        const tracks = this.localStream.getTracks();
+        console.log('[CallService] Adding', tracks.length, 'local tracks');
+        tracks.forEach(track => {
           this.peerConnection!.addTrack(track, this.localStream!);
         });
       }
 
       // Set remote description (the offer)
+      console.log('[CallService] Setting remote description (offer)');
       await this.peerConnection!.setRemoteDescription({
         type: 'offer',
         sdp: remoteSdp,
       });
+      console.log('[CallService] Remote description set');
 
       // Process any pending ICE candidates
+      console.log('[CallService] Processing', this.pendingIceCandidates.length, 'pending ICE candidates');
       await this.processPendingIceCandidates();
 
       // Create answer
+      console.log('[CallService] Creating SDP answer');
       const answer = await this.peerConnection!.createAnswer();
       await this.peerConnection!.setLocalDescription(answer);
+      console.log('[CallService] Local description (answer) set');
 
       // Send answer via signaling
+      console.log('[CallService] Sending call_answer to', contactId);
       this.sendSignalingMessage(contactId, {
         type: 'call_answer',
         callId,
@@ -362,10 +421,11 @@ class CallService {
       callId,
     });
 
-    // Clear session immediately
+    // Store session for cleanup and clear immediately
+    const sessionToClean = this.currentSession;
     this.currentSession = null;
 
-    await this.cleanup();
+    await this.cleanup(sessionToClean);
     console.log('[CallService] Call rejected:', callId);
   }
 
@@ -377,11 +437,14 @@ class CallService {
       return;
     }
 
-    if (this.currentSession) {
+    // Store session info before clearing for cleanup
+    const sessionToClean = this.currentSession;
+
+    if (sessionToClean) {
       // Notify remote peer
-      this.sendSignalingMessage(this.currentSession.contactId, {
+      this.sendSignalingMessage(sessionToClean.contactId, {
         type: 'call_end',
-        callId: this.currentSession.callId,
+        callId: sessionToClean.callId,
       });
     }
 
@@ -391,8 +454,8 @@ class CallService {
     this.notifyStateChange('ended');
     console.log('[CallService] Call ended');
 
-    // Run cleanup asynchronously
-    await this.cleanup();
+    // Run cleanup with stored session info
+    await this.cleanup(sessionToClean);
   }
 
   // Toggle mute
@@ -557,8 +620,27 @@ class CallService {
         }
         this.notifyStateChange('connected');
       } else if (state === 'disconnected' || state === 'failed') {
+        console.log('[CallService] WebRTC connection failed/disconnected, ending call');
         this.endCall();
       }
+    };
+
+    // Handle ICE connection state changes (more granular than connection state)
+    (this.peerConnection as any).oniceconnectionstatechange = () => {
+      const iceState = (this.peerConnection as any)?.iceConnectionState;
+      console.log('[CallService] ICE connection state:', iceState);
+    };
+
+    // Handle ICE gathering state changes
+    (this.peerConnection as any).onicegatheringstatechange = () => {
+      const gatheringState = (this.peerConnection as any)?.iceGatheringState;
+      console.log('[CallService] ICE gathering state:', gatheringState);
+    };
+
+    // Handle signaling state changes
+    (this.peerConnection as any).onsignalingstatechange = () => {
+      const signalingState = (this.peerConnection as any)?.signalingState;
+      console.log('[CallService] Signaling state:', signalingState);
     };
 
     // Handle remote tracks
@@ -654,8 +736,10 @@ class CallService {
         // Recipient is not available - notify caller
         if (this.currentSession) {
           console.log('[CallService] Recipient is offline');
+          const sessionToClean = this.currentSession;
+          this.currentSession = null;
           this.notifyStateChange('no_answer');
-          this.cleanup();
+          this.cleanup(sessionToClean);
         }
         break;
     }
@@ -738,16 +822,20 @@ class CallService {
       case 'call_reject':
         // Call was rejected
         if (this.currentSession?.callId === message.callId) {
-          this.cleanup();
+          const sessionToClean = this.currentSession;
+          this.currentSession = null;
           this.notifyStateChange('ended');
+          this.cleanup(sessionToClean);
         }
         break;
 
       case 'call_end':
         // Call ended by remote peer
         if (this.currentSession?.callId === message.callId) {
-          this.cleanup();
+          const sessionToClean = this.currentSession;
+          this.currentSession = null;
           this.notifyStateChange('ended');
+          this.cleanup(sessionToClean);
         }
         break;
 
@@ -845,13 +933,16 @@ class CallService {
   }
 
   // Private: Cleanup resources
-  private async cleanup(): Promise<void> {
+  private async cleanup(sessionToClean?: CallSession | null): Promise<void> {
     console.log('[CallService] Cleaning up call resources...');
     this.isCleaningUp = true;
 
+    // Use passed session or fall back to currentSession
+    const session = sessionToClean || this.currentSession;
+
     // End call on CallKeep (native call UI)
-    if (this.currentSession) {
-      callKeepService.endCall(this.currentSession.callId);
+    if (session) {
+      callKeepService.endCall(session.callId);
     }
 
     // Stop InCallManager
