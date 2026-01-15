@@ -1832,6 +1832,8 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     color: colors.textSecondary,
     lineHeight: moderateScale(22),
+    textAlign: 'left',
+    writingDirection: 'ltr',
   },
   messageTextMine: {
     color: colors.text,
@@ -1906,6 +1908,8 @@ const styles = StyleSheet.create({
     color: colors.text,
     maxHeight: moderateScale(100),
     marginRight: spacing.sm,
+    textAlign: 'left',
+    writingDirection: 'ltr',
   },
   sendButton: {
     width: moderateScale(44),

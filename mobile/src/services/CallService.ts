@@ -3,6 +3,20 @@ import { generateId } from '../utils/helpers';
 import { messagingService } from './MessagingService';
 import { callKeepService } from './CallKeepService';
 
+// InCallManager for audio routing (speaker, proximity sensor, etc.)
+let InCallManager: any = null;
+const loadInCallManager = async () => {
+  if (InCallManager) return InCallManager;
+  try {
+    const module = await import('react-native-incall-manager');
+    InCallManager = module.default;
+    return InCallManager;
+  } catch (e) {
+    console.warn('[CallService] InCallManager not available:', e);
+    return null;
+  }
+};
+
 // Default STUN servers (fallback)
 const DEFAULT_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -185,7 +199,7 @@ class CallService {
 
     const callId = generateId();
 
-    // Create session
+    // Create session - video calls default to speaker ON
     this.currentSession = {
       callId,
       contactId: contact.whisperId,
@@ -193,10 +207,22 @@ class CallService {
       isVideo,
       state: 'calling',
       isMuted: false,
-      isSpeakerOn: false,
+      isSpeakerOn: isVideo, // Video calls use speaker by default
       isCameraOn: isVideo,
       isFrontCamera: true,
     };
+
+    // Start InCallManager for audio routing
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.start({ media: isVideo ? 'video' : 'audio' });
+        manager.setSpeakerphoneOn(isVideo); // Speaker on for video calls
+        console.log('[CallService] InCallManager started for', isVideo ? 'video' : 'audio');
+      } catch (e) {
+        console.warn('[CallService] Failed to start InCallManager:', e);
+      }
+    }
 
     this.notifyStateChange('calling');
 
@@ -245,7 +271,7 @@ class CallService {
       throw new Error('Another call already in progress');
     }
 
-    // Update session
+    // Update session - video calls default to speaker ON
     this.currentSession = {
       callId,
       contactId,
@@ -253,10 +279,22 @@ class CallService {
       isVideo,
       state: 'connecting',
       isMuted: false,
-      isSpeakerOn: false,
+      isSpeakerOn: isVideo, // Video calls use speaker by default
       isCameraOn: isVideo,
       isFrontCamera: true,
     };
+
+    // Start InCallManager for audio routing
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.start({ media: isVideo ? 'video' : 'audio' });
+        manager.setSpeakerphoneOn(isVideo); // Speaker on for video calls
+        console.log('[CallService] InCallManager started for incoming', isVideo ? 'video' : 'audio');
+      } catch (e) {
+        console.warn('[CallService] Failed to start InCallManager:', e);
+      }
+    }
 
     this.notifyStateChange('connecting');
 
@@ -411,12 +449,22 @@ class CallService {
   }
 
   // Toggle speaker
-  toggleSpeaker(): boolean {
+  async toggleSpeaker(): Promise<boolean> {
     if (!this.currentSession) return false;
 
-    // Speaker control depends on the platform
-    // For react-native-webrtc, use InCallManager
     this.currentSession.isSpeakerOn = !this.currentSession.isSpeakerOn;
+
+    // Use InCallManager for actual speaker control
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.setSpeakerphoneOn(this.currentSession.isSpeakerOn);
+        console.log('[CallService] Speaker:', this.currentSession.isSpeakerOn ? 'ON' : 'OFF');
+      } catch (e) {
+        console.warn('[CallService] Failed to set speaker:', e);
+      }
+    }
+
     return this.currentSession.isSpeakerOn;
   }
 
@@ -725,13 +773,24 @@ class CallService {
   }
 
   // Private: Cleanup resources
-  private cleanup(): void {
+  private async cleanup(): Promise<void> {
     console.log('[CallService] Cleaning up call resources...');
     this.isCleaningUp = true;
 
     // End call on CallKeep (native call UI)
     if (this.currentSession) {
       callKeepService.endCall(this.currentSession.callId);
+    }
+
+    // Stop InCallManager
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.stop();
+        console.log('[CallService] InCallManager stopped');
+      } catch (e) {
+        console.warn('[CallService] Failed to stop InCallManager:', e);
+      }
     }
 
     // Stop local tracks first

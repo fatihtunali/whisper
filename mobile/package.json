@@ -37,6 +37,7 @@
     "react-native-svg": "15.12.1",
     "react-native-webrtc": "^124.0.4",
     "react-native-callkeep": "^4.3.12",
+    "react-native-incall-manager": "^4.2.0",
     "react-native-voip-push-notification": "^3.3.2",
     "tweetnacl": "^1.0.3",
     "tweetnacl-util": "^0.15.1"

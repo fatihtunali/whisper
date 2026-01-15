@@ -153,8 +153,8 @@ export default function CallScreen() {
   };
 
   // Handle speaker toggle
-  const handleToggleSpeaker = () => {
-    const newSpeaker = callService.toggleSpeaker();
+  const handleToggleSpeaker = async () => {
+    const newSpeaker = await callService.toggleSpeaker();
     setIsSpeakerOn(newSpeaker);
   };
 
