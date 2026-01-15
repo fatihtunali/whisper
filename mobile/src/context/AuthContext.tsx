@@ -5,6 +5,7 @@ import { cryptoService } from '../crypto/CryptoService';
 import { messagingService } from '../services/MessagingService';
 import { notificationService } from '../services/NotificationService';
 import { callService } from '../services/CallService';
+import { callKeepService } from '../services/CallKeepService';
 import { navigate } from '../utils/navigationRef';
 
 interface AuthContextType {
@@ -123,6 +124,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }, 100);
         });
 
+        // Set up CallKeep event handlers for native call UI
+        callKeepService.onAnswerCall = async (callId) => {
+          console.log('[AuthContext] CallKeep answer call:', callId);
+          // The call screen will handle accepting the call
+          // Just navigate to the appropriate screen
+          const session = callService.getCurrentSession();
+          if (session && session.callId === callId) {
+            const isVideo = session.isVideo;
+            const contactId = session.contactId;
+            setTimeout(() => {
+              if (isVideo) {
+                navigate('VideoCall', {
+                  contactId: contactId,
+                  isIncoming: true,
+                  callId,
+                });
+              } else {
+                navigate('Call', {
+                  contactId: contactId,
+                  isIncoming: true,
+                  callId,
+                });
+              }
+            }, 100);
+          }
+        };
+
+        callKeepService.onEndCall = (callId) => {
+          console.log('[AuthContext] CallKeep end call:', callId);
+          callService.endCall();
+        };
+
+        // Set up NotificationService incoming call handler (for VoIP push)
+        notificationService.onIncomingCall = (callId, fromWhisperId, isVideo, callerName) => {
+          console.log('[AuthContext] VoIP incoming call:', { callId, fromWhisperId, isVideo, callerName });
+          // Navigate to call screen
+          setTimeout(() => {
+            if (isVideo) {
+              navigate('VideoCall', {
+                contactId: fromWhisperId,
+                isIncoming: true,
+                callId,
+              });
+            } else {
+              navigate('Call', {
+                contactId: fromWhisperId,
+                isIncoming: true,
+                callId,
+              });
+            }
+          }, 100);
+        };
+
         // Connect to messaging service
         console.log('[AuthContext] Connecting to messaging service...');
         messagingService.connect(user);
@@ -132,7 +186,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       return () => {
         notificationService.removeListeners();
+        notificationService.onIncomingCall = null;
         callService.setIncomingCallHandler(null);
+        callKeepService.onAnswerCall = null;
+        callKeepService.onEndCall = null;
       };
     }
   }, [user]);
