@@ -36,12 +36,19 @@ let RNCallKeep: any = null;
 let callKeepAvailable: boolean | null = null;
 
 // Check if CallKeep native module is available at runtime
+// This function is designed to NEVER throw - always returns a boolean
 const checkCallKeepAvailable = (): boolean => {
   if (callKeepAvailable !== null) return callKeepAvailable;
 
   try {
     // Check if the native module exists before attempting to use it
     const { NativeModules } = require('react-native');
+    // Double-check NativeModules exists and is an object
+    if (!NativeModules || typeof NativeModules !== 'object') {
+      callKeepAvailable = false;
+      console.log('[CallKeepService] NativeModules not available - CallKeep features disabled');
+      return false;
+    }
     callKeepAvailable = !!(NativeModules.RNCallKeep);
     if (!callKeepAvailable) {
       console.log('[CallKeepService] Native module not available - CallKeep features disabled');
@@ -49,7 +56,7 @@ const checkCallKeepAvailable = (): boolean => {
     return callKeepAvailable;
   } catch (e) {
     callKeepAvailable = false;
-    console.log('[CallKeepService] Native module check failed - CallKeep features disabled');
+    console.log('[CallKeepService] Native module check failed - CallKeep features disabled:', e);
     return false;
   }
 };

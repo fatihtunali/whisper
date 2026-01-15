@@ -14,6 +14,7 @@ let VoipPushNotification: any = null;
 let voipPushAvailable: boolean | null = null;
 
 // Check if VoIP Push native module is available at runtime
+// This function is designed to NEVER throw - always returns a boolean
 const checkVoIPPushAvailable = (): boolean => {
   if (Platform.OS !== 'ios') return false;
   if (voipPushAvailable !== null) return voipPushAvailable;
@@ -21,6 +22,12 @@ const checkVoIPPushAvailable = (): boolean => {
   try {
     // Check if the native module exists before attempting to use it
     const { NativeModules } = require('react-native');
+    // Double-check NativeModules exists and is an object
+    if (!NativeModules || typeof NativeModules !== 'object') {
+      voipPushAvailable = false;
+      console.log('[VoIPPushService] NativeModules not available - VoIP push features disabled');
+      return false;
+    }
     voipPushAvailable = !!(NativeModules.RNVoipPushNotificationManager);
     if (!voipPushAvailable) {
       console.log('[VoIPPushService] Native module not available - VoIP push features disabled');
@@ -28,7 +35,7 @@ const checkVoIPPushAvailable = (): boolean => {
     return voipPushAvailable;
   } catch (e) {
     voipPushAvailable = false;
-    console.log('[VoIPPushService] Native module check failed - VoIP push features disabled');
+    console.log('[VoIPPushService] Native module check failed - VoIP push features disabled:', e);
     return false;
   }
 };

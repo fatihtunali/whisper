@@ -45,29 +45,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (user) {
       const initializeAndConnect = async () => {
-        // CRITICAL: Set platform BEFORE connecting so registration includes correct platform
-        messagingService.setPlatform(Platform.OS as 'ios' | 'android' | 'unknown');
-        console.log('[AuthContext] Platform set to:', Platform.OS);
+        try {
+          // CRITICAL: Set platform BEFORE connecting so registration includes correct platform
+          messagingService.setPlatform(Platform.OS as 'ios' | 'android' | 'unknown');
+          console.log('[AuthContext] Platform set to:', Platform.OS);
 
-        // IMPORTANT: Connect to WebSocket IMMEDIATELY so user is online right away
-        // Don't wait for push notifications to initialize
-        console.log('[AuthContext] Connecting to messaging service...');
-        messagingService.connect(user);
+          // IMPORTANT: Connect to WebSocket IMMEDIATELY so user is online right away
+          // Don't wait for push notifications to initialize
+          console.log('[AuthContext] Connecting to messaging service...');
+          messagingService.connect(user);
+        } catch (connectError) {
+          console.error('[AuthContext] Failed to connect to messaging service:', connectError);
+        }
 
         // Initialize push notifications in parallel (don't block connection)
         // setPushToken and setVoIPToken will auto-re-register if connected
-        console.log('[AuthContext] Initializing push notifications...');
-        notificationService.initialize().then((pushToken) => {
-          if (pushToken) {
-            messagingService.setPushToken(pushToken);
-            // Note: setPushToken now auto-re-registers if connected
-          }
-        }).catch((err) => {
-          console.warn('[AuthContext] Push notification init failed:', err);
-        });
+        // Wrapped in try-catch to prevent iOS crashes from native module issues
+        try {
+          console.log('[AuthContext] Initializing push notifications...');
+          notificationService.initialize().then((pushToken) => {
+            if (pushToken) {
+              messagingService.setPushToken(pushToken);
+              // Note: setPushToken now auto-re-registers if connected
+            }
+          }).catch((err) => {
+            console.warn('[AuthContext] Push notification init failed:', err);
+          });
+        } catch (notificationError) {
+          console.error('[AuthContext] Push notification initialization crashed:', notificationError);
+        }
 
-        // Set up notification listeners
-        notificationService.setupListeners(
+        // Set up notification listeners - wrapped in try-catch for safety
+        try {
+          notificationService.setupListeners(
           // On notification received while app is open
           (notification) => {
             console.log('[AuthContext] Notification received in foreground');
@@ -106,9 +116,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }
         );
+        } catch (listenerError) {
+          console.error('[AuthContext] Failed to set up notification listeners:', listenerError);
+        }
 
-        // Set up global incoming call handler
-        callService.setIncomingCallHandler(async (callId, fromWhisperId, isVideo) => {
+        // Set up global incoming call handler - wrapped in try-catch for safety
+        try {
+          callService.setIncomingCallHandler(async (callId, fromWhisperId, isVideo) => {
           console.log('[AuthContext] Incoming call:', { callId, fromWhisperId, isVideo });
 
           // Get contact name for notification
@@ -140,9 +154,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }, 100);
         });
+        } catch (callHandlerError) {
+          console.error('[AuthContext] Failed to set up call handler:', callHandlerError);
+        }
 
-        // Set up CallKeep event handlers for native call UI
-        callKeepService.onAnswerCall = async (callId) => {
+        // Set up CallKeep event handlers for native call UI - wrapped in try-catch for safety
+        try {
+          callKeepService.onAnswerCall = async (callId) => {
           console.log('[AuthContext] CallKeep answer call:', callId);
           // The call screen will handle accepting the call
           // Just navigate to the appropriate screen
@@ -172,9 +190,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('[AuthContext] CallKeep end call:', callId);
           callService.endCall();
         };
+        } catch (callKeepError) {
+          console.error('[AuthContext] Failed to set up CallKeep handlers:', callKeepError);
+        }
 
-        // Set up NotificationService incoming call handler (for VoIP push)
-        notificationService.onIncomingCall = (callId, fromWhisperId, isVideo, callerName) => {
+        // Set up NotificationService incoming call handler (for VoIP push) - wrapped in try-catch for safety
+        try {
+          notificationService.onIncomingCall = (callId, fromWhisperId, isVideo, callerName) => {
           console.log('[AuthContext] VoIP incoming call:', { callId, fromWhisperId, isVideo, callerName });
           // Navigate to call screen
           setTimeout(() => {
@@ -193,6 +215,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
           }, 100);
         };
+        } catch (voipError) {
+          console.error('[AuthContext] Failed to set up VoIP handler:', voipError);
+        }
       };
 
       initializeAndConnect();

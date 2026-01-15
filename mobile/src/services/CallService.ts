@@ -9,12 +9,19 @@ let inCallManagerAvailable: boolean | null = null;
 let inCallManagerLoadAttempted: boolean = false;
 
 // Check if InCallManager native module is available at runtime
+// This function is designed to NEVER throw - always returns a boolean
 const checkInCallManagerAvailable = (): boolean => {
   if (inCallManagerAvailable !== null) return inCallManagerAvailable;
 
   try {
     // Check if the native module exists before attempting to use it
     const { NativeModules } = require('react-native');
+    // Double-check NativeModules exists and is an object
+    if (!NativeModules || typeof NativeModules !== 'object') {
+      inCallManagerAvailable = false;
+      console.log('[CallService] NativeModules not available - InCallManager features disabled');
+      return false;
+    }
     inCallManagerAvailable = !!(NativeModules.InCallManager);
     if (!inCallManagerAvailable) {
       console.log('[CallService] InCallManager native module not available - audio features limited');
@@ -22,7 +29,7 @@ const checkInCallManagerAvailable = (): boolean => {
     return inCallManagerAvailable;
   } catch (e) {
     inCallManagerAvailable = false;
-    console.log('[CallService] InCallManager native module check failed');
+    console.log('[CallService] InCallManager native module check failed:', e);
     return false;
   }
 };

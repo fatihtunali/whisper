@@ -5,21 +5,11 @@ import { callKeepService } from './CallKeepService';
 import { voipPushService } from './VoIPPushService';
 import { messagingService } from './MessagingService';
 
-// Configure how notifications are handled when app is in foreground
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowAlert: true,
-    shouldPlaySound: true,
-    shouldSetBadge: true,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
-});
-
-// Note: Background notification handling is done via setNotificationHandler above
-// which handles both foreground and background notifications on iOS/Android
+// NOTE: setNotificationHandler is now called inside initialize() to prevent iOS crashes
+// Calling it at module load time can crash the app before native modules are ready
 
 class NotificationService {
+  private notificationHandlerConfigured: boolean = false;
   private pushToken: string | null = null;
   private voipToken: string | null = null;
   private notificationListener: Notifications.Subscription | null = null;
@@ -31,6 +21,27 @@ class NotificationService {
   // Initialize notifications and get push token
   async initialize(): Promise<string | null> {
     try {
+      // Configure notification handler ONCE during initialization (not at module load time)
+      // This prevents iOS crashes when native modules aren't ready yet
+      if (!this.notificationHandlerConfigured) {
+        try {
+          Notifications.setNotificationHandler({
+            handleNotification: async () => ({
+              shouldShowAlert: true,
+              shouldPlaySound: true,
+              shouldSetBadge: true,
+              shouldShowBanner: true,
+              shouldShowList: true,
+            }),
+          });
+          this.notificationHandlerConfigured = true;
+          console.log('[NotificationService] Notification handler configured');
+        } catch (handlerError) {
+          console.warn('[NotificationService] Failed to configure notification handler:', handlerError);
+          // Continue anyway - notifications may still work for some features
+        }
+      }
+
       // Check if physical device (push notifications don't work on simulators)
       if (!Device.isDevice) {
         console.log('[NotificationService] Must use physical device for push notifications');
