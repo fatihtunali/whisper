@@ -234,6 +234,14 @@ class ConnectionManager {
     return this.clients.size;
   }
 
+  // Get total registered users count (active in last 24h - app installed)
+  async getRegisteredCount(): Promise<number> {
+    if (this.useRedis) {
+      return redisService.getRegisteredCount();
+    }
+    return this.clients.size;
+  }
+
   // Get all connected Whisper IDs
   getAllIds(): string[] {
     return Array.from(this.clients.keys());

@@ -1336,9 +1336,14 @@ export class WebSocketServer {
   }
 
   // Get server statistics
-  async getStats(): Promise<{ connections: number; pendingMessages: { users: number; messages: number } }> {
+  async getStats(): Promise<{
+    activeConnections: number;
+    registeredUsers: number;
+    pendingMessages: { users: number; messages: number }
+  }> {
     return {
-      connections: connectionManager.getCount(),
+      activeConnections: connectionManager.getCount(),
+      registeredUsers: await connectionManager.getRegisteredCount(),
       pendingMessages: await messageQueue.getStats(),
     };
   }

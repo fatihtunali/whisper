@@ -16,8 +16,9 @@ import Redis from 'ioredis';
 
 // Key prefixes for organization
 const KEYS = {
-  ONLINE: 'whisper:online:',           // whisper:online:{whisperId} -> socketId
+  ONLINE: 'whisper:online:',           // whisper:online:{whisperId} -> socketId (active WebSocket)
   SOCKET: 'whisper:socket:',           // whisper:socket:{socketId} -> whisperId
+  REGISTERED: 'whisper:registered:',   // whisper:registered:{whisperId} -> timestamp (installed/registered users)
   PUSH_TOKEN: 'whisper:push:',         // whisper:push:{whisperId} -> pushToken
   VOIP_TOKEN: 'whisper:voip:',         // whisper:voip:{whisperId} -> voipToken
   LAST_SEEN: 'whisper:lastseen:',      // whisper:lastseen:{whisperId} -> timestamp
@@ -99,7 +100,36 @@ class RedisService {
   // ==================== PRESENCE ====================
 
   /**
-   * Mark user as online
+   * Mark user as registered (installed the app)
+   * This keeps users "online" for 24 hours after last activity
+   * @param whisperId User's Whisper ID
+   * @param ttl Time to live in seconds (default 24 hours)
+   */
+  async setRegistered(whisperId: string, ttl: number = 86400): Promise<void> {
+    if (!this.client) return;
+    await this.client.setex(KEYS.REGISTERED + whisperId, ttl, Date.now().toString());
+  }
+
+  /**
+   * Check if user is registered (has been active in last 24 hours)
+   */
+  async isRegistered(whisperId: string): Promise<boolean> {
+    if (!this.client) return false;
+    const result = await this.client.exists(KEYS.REGISTERED + whisperId);
+    return result === 1;
+  }
+
+  /**
+   * Get count of all registered users (active in last 24 hours)
+   */
+  async getRegisteredCount(): Promise<number> {
+    if (!this.client) return 0;
+    const keys = await this.client.keys(KEYS.REGISTERED + '*');
+    return keys.length;
+  }
+
+  /**
+   * Mark user as online (active WebSocket connection)
    * @param whisperId User's Whisper ID
    * @param socketId WebSocket connection ID
    * @param ttl Time to live in seconds (default 5 minutes, refreshed on activity)
@@ -109,10 +139,12 @@ class RedisService {
 
     const pipeline = this.client.pipeline();
 
-    // Set online status with TTL
+    // Set online status with TTL (active WebSocket)
     pipeline.setex(KEYS.ONLINE + whisperId, ttl, socketId);
     // Reverse mapping: socket -> user
     pipeline.setex(KEYS.SOCKET + socketId, ttl, whisperId);
+    // Mark as registered with 24h TTL (stays "online" even when app is in background)
+    pipeline.setex(KEYS.REGISTERED + whisperId, 86400, Date.now().toString());
     // Update last seen
     pipeline.set(KEYS.LAST_SEEN + whisperId, Date.now().toString());
 
