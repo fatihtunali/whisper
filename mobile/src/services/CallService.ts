@@ -356,18 +356,21 @@ class CallService {
   }
 
   // Reject an incoming call
-  rejectCall(callId: string, contactId: string): void {
+  async rejectCall(callId: string, contactId: string): Promise<void> {
     this.sendSignalingMessage(contactId, {
       type: 'call_reject',
       callId,
     });
 
-    this.cleanup();
+    // Clear session immediately
+    this.currentSession = null;
+
+    await this.cleanup();
     console.log('[CallService] Call rejected:', callId);
   }
 
   // End the current call
-  endCall(): void {
+  async endCall(): Promise<void> {
     // Prevent multiple endCall invocations
     if (this.isCleaningUp) {
       console.log('[CallService] Already ending call, ignoring duplicate');
@@ -382,9 +385,14 @@ class CallService {
       });
     }
 
-    this.cleanup();
+    // Clear session immediately to allow new calls
+    this.currentSession = null;
+
     this.notifyStateChange('ended');
     console.log('[CallService] Call ended');
+
+    // Run cleanup asynchronously
+    await this.cleanup();
   }
 
   // Toggle mute
@@ -868,8 +876,10 @@ class CallService {
     // Clear pending ICE candidates
     this.pendingIceCandidates = [];
 
-    // Clear session
-    this.currentSession = null;
+    // Clear session (may already be null if endCall was called)
+    if (this.currentSession) {
+      this.currentSession = null;
+    }
 
     // Mark cleanup as complete
     this.isCleaningUp = false;
