@@ -532,8 +532,9 @@ export default function ChatScreen() {
         playsInSilentMode: true,
       });
 
-      // Start recording using the hook's recorder
-      await audioRecorder.record();
+      // Prepare and start recording using the hook's recorder
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
       setIsRecordingLocal(true);
       setRecordingDuration(0);
       recordingDurationRef.current = 0;
