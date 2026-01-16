@@ -205,6 +205,9 @@ export class WebSocketServer {
   ): void {
     const { whisperId, publicKey, signingPublicKey, pushToken, voipToken, platform, prefs } = payload;
 
+    // Debug: log incoming register payload
+    console.log(`[WebSocket] Register request from ${whisperId}: pushToken=${pushToken ? 'present(' + pushToken.substring(0, 20) + '...)' : 'MISSING'}, platform=${platform || 'unknown'}`);
+
     // Get socket ID
     const socketId = this.socketIds.get(socket);
     if (!socketId) {
