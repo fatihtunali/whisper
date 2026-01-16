@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 import { callKeepService } from './CallKeepService';
 import { voipPushService } from './VoIPPushService';
 import { messagingService } from './MessagingService';
+import { registerBackgroundNotificationTask } from './BackgroundNotificationHandler';
 
 // NOTE: setNotificationHandler is now called inside initialize() to prevent iOS crashes
 // Calling it at module load time can crash the app before native modules are ready
@@ -72,6 +73,14 @@ class NotificationService {
       } catch (tokenError) {
         console.error('[NotificationService] Failed to get Expo push token:', tokenError);
         // Continue without push token - other features may still work
+      }
+
+      // Register background notification task
+      try {
+        await registerBackgroundNotificationTask();
+      } catch (bgError) {
+        console.warn('[NotificationService] Failed to register background task:', bgError);
+        // Continue - notifications will still work, just not headless background processing
       }
 
       // Set up Android notification channels

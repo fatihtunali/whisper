@@ -1,5 +1,9 @@
 import { registerRootComponent } from 'expo';
 
+// Import background notification handler EARLY - must be in module scope
+// This registers the background task before the app loads
+import './src/services/BackgroundNotificationHandler';
+
 import App from './App';
 
 // registerRootComponent calls AppRegistry.registerComponent('main', () => App);

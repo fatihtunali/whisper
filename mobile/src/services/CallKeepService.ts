@@ -27,6 +27,12 @@ interface CallKeepOptions {
     okButton: string;
     additionalPermissions: string[];
     selfManaged: boolean;
+    foregroundService?: {
+      channelId: string;
+      channelName: string;
+      notificationTitle: string;
+      notificationIcon: string;
+    };
   };
 }
 
@@ -108,6 +114,13 @@ class CallKeepService {
           okButton: 'OK',
           additionalPermissions: [],
           selfManaged: true,
+          // Foreground service for background calls (Android 11+)
+          foregroundService: {
+            channelId: 'com.sarjmobile.whisper.calls',
+            channelName: 'Whisper Calls',
+            notificationTitle: 'Whisper Call in Progress',
+            notificationIcon: 'ic_launcher',
+          },
         },
       };
 
