@@ -246,9 +246,10 @@ class CallService {
 
       if (response) {
         this.turnCredentials = response;
-        // Set expiry to 1 hour before actual expiry for safety margin
-        this.turnCredentialsExpiry = Date.now() + (response.ttl - 3600) * 1000;
-        console.log('[CallService] TURN credentials received');
+        // Set expiry with safety margin (10% of TTL or 5 minutes, whichever is smaller)
+        const safetyMargin = Math.min(response.ttl * 0.1, 300); // max 5 minutes
+        this.turnCredentialsExpiry = Date.now() + Math.max(0, response.ttl - safetyMargin) * 1000;
+        console.log('[CallService] TURN credentials received, TTL:', response.ttl);
       }
 
       return response;
@@ -449,10 +450,14 @@ class CallService {
       // Add local tracks to peer connection
       if (this.localStream && this.peerConnection) {
         const tracks = this.localStream.getTracks();
-        console.log('[CallService] Adding', tracks.length, 'local tracks to peer connection');
-        tracks.forEach(track => {
-          this.peerConnection!.addTrack(track, this.localStream!);
-        });
+        if (tracks && tracks.length > 0) {
+          console.log('[CallService] Adding', tracks.length, 'local tracks to peer connection');
+          tracks.forEach(track => {
+            this.peerConnection!.addTrack(track, this.localStream!);
+          });
+        } else {
+          console.warn('[CallService] No local tracks available to add');
+        }
       }
 
       // Create offer
@@ -542,10 +547,14 @@ class CallService {
       // Add local tracks
       if (this.localStream && this.peerConnection) {
         const tracks = this.localStream.getTracks();
-        console.log('[CallService] Adding', tracks.length, 'local tracks');
-        tracks.forEach(track => {
-          this.peerConnection!.addTrack(track, this.localStream!);
-        });
+        if (tracks && tracks.length > 0) {
+          console.log('[CallService] Adding', tracks.length, 'local tracks');
+          tracks.forEach(track => {
+            this.peerConnection!.addTrack(track, this.localStream!);
+          });
+        } else {
+          console.warn('[CallService] No local tracks available to add');
+        }
       }
 
       // Set remote description (the offer)
@@ -662,26 +671,30 @@ class CallService {
   toggleMute(): boolean {
     if (!this.localStream || !this.currentSession) return false;
 
-    const audioTrack = this.localStream.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      this.currentSession.isMuted = !audioTrack.enabled;
-      return this.currentSession.isMuted;
+    const audioTracks = this.localStream.getAudioTracks();
+    if (!audioTracks || audioTracks.length === 0) {
+      console.warn('[CallService] No audio tracks available for mute toggle');
+      return false;
     }
-    return false;
+    const audioTrack = audioTracks[0];
+    audioTrack.enabled = !audioTrack.enabled;
+    this.currentSession.isMuted = !audioTrack.enabled;
+    return this.currentSession.isMuted;
   }
 
   // Toggle video
   toggleVideo(): boolean {
     if (!this.localStream || !this.currentSession) return false;
 
-    const videoTrack = this.localStream.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      this.currentSession.isCameraOn = videoTrack.enabled;
-      return this.currentSession.isCameraOn;
+    const videoTracks = this.localStream.getVideoTracks();
+    if (!videoTracks || videoTracks.length === 0) {
+      console.warn('[CallService] No video tracks available for video toggle');
+      return false;
     }
-    return false;
+    const videoTrack = videoTracks[0];
+    videoTrack.enabled = !videoTrack.enabled;
+    this.currentSession.isCameraOn = videoTrack.enabled;
+    return this.currentSession.isCameraOn;
   }
 
   // Switch camera (front/back)
@@ -690,8 +703,12 @@ class CallService {
       return false;
     }
 
-    const videoTrack = (this.localStream as any).getVideoTracks()[0];
-    if (!videoTrack) return false;
+    const videoTracks = (this.localStream as any).getVideoTracks();
+    if (!videoTracks || videoTracks.length === 0) {
+      console.warn('[CallService] No video tracks available for camera switch');
+      return false;
+    }
+    const videoTrack = videoTracks[0];
 
     try {
       // For react-native-webrtc, use the _switchCamera method
@@ -710,14 +727,23 @@ class CallService {
         audio: false,
       });
 
-      const newVideoTrack = (newStream as any).getVideoTracks()[0];
+      const newVideoTracks = (newStream as any).getVideoTracks();
+      if (!newVideoTracks || newVideoTracks.length === 0) {
+        console.warn('[CallService] Failed to get new video track for camera switch');
+        return this.currentSession.isFrontCamera;
+      }
+      const newVideoTrack = newVideoTracks[0];
 
       // Replace track in peer connection
       if (this.peerConnection) {
-        const senders = (this.peerConnection as any).getSenders();
-        const sender = senders?.find((s: any) => s.track?.kind === 'video');
-        if (sender) {
-          await sender.replaceTrack(newVideoTrack);
+        const senders = (this.peerConnection as any).getSenders?.();
+        if (senders && Array.isArray(senders)) {
+          const sender = senders.find((s: any) => s.track?.kind === 'video');
+          if (sender && typeof sender.replaceTrack === 'function') {
+            await sender.replaceTrack(newVideoTrack);
+          } else {
+            console.warn('[CallService] No video sender found or replaceTrack not available');
+          }
         }
       }
 
@@ -736,17 +762,23 @@ class CallService {
 
   // Toggle speaker
   async toggleSpeaker(): Promise<boolean> {
-    if (!this.currentSession) return false;
+    // Capture session locally to prevent race conditions
+    const session = this.currentSession;
+    if (!session) return false;
 
     // Store the new speaker state locally in case session becomes null during await
-    const newSpeakerState = !this.currentSession.isSpeakerOn;
-    this.currentSession.isSpeakerOn = newSpeakerState;
+    const newSpeakerState = !session.isSpeakerOn;
+
+    // Only update if session is still valid
+    if (this.currentSession) {
+      this.currentSession.isSpeakerOn = newSpeakerState;
+    }
 
     // Use InCallManager for actual speaker control
     try {
       const manager = await loadInCallManager();
-      // Re-check session after async operation
-      if (manager && this.currentSession) {
+      // Re-check session after async operation and that we're not cleaning up
+      if (manager && this.currentSession && !this.isCleaningUp) {
         try {
           manager.setSpeakerphoneOn(newSpeakerState);
           console.log('[CallService] Speaker:', newSpeakerState ? 'ON' : 'OFF');
@@ -809,10 +841,12 @@ class CallService {
 
     // Handle ICE candidates
     (this.peerConnection as any).onicecandidate = (event: any) => {
-      if (event.candidate && this.currentSession) {
-        this.sendSignalingMessage(this.currentSession.contactId, {
+      // Capture session data locally to prevent race condition with cleanup
+      const session = this.currentSession;
+      if (event.candidate && session && !this.isCleaningUp) {
+        this.sendSignalingMessage(session.contactId, {
           type: 'ice_candidate',
-          callId: this.currentSession.callId,
+          callId: session.callId,
           candidate: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate,
         });
       }
@@ -820,24 +854,37 @@ class CallService {
 
     // Handle connection state changes
     (this.peerConnection as any).onconnectionstatechange = async () => {
+      // Early exit if cleanup is in progress to prevent race conditions
+      if (this.isCleaningUp) {
+        console.log('[CallService] Ignoring connection state change - cleanup in progress');
+        return;
+      }
+
       const state = (this.peerConnection as any)?.connectionState;
       console.log('[CallService] Connection state:', state);
+
+      // Capture session locally to prevent race condition
+      const session = this.currentSession;
 
       if (state === 'connected') {
         // Stop ringback as backup (in case call_answer handler didn't run first)
         // Only for outgoing calls that had ringback
-        if (this.currentSession && !this.currentSession.isIncoming) {
+        if (session && !session.isIncoming) {
           await this.stopRingbackAndConfigureActiveCall();
         }
 
-        if (this.currentSession) {
+        // Re-check session after async operation
+        if (this.currentSession && !this.isCleaningUp) {
           this.currentSession.state = 'connected';
           this.currentSession.startTime = Date.now();
+          this.notifyStateChange('connected');
         }
-        this.notifyStateChange('connected');
       } else if (state === 'disconnected' || state === 'failed') {
-        console.log('[CallService] WebRTC connection failed/disconnected, ending call');
-        this.endCall();
+        // Only end call if not already cleaning up
+        if (!this.isCleaningUp) {
+          console.log('[CallService] WebRTC connection failed/disconnected, ending call');
+          this.endCall();
+        }
       }
     };
 
@@ -934,11 +981,18 @@ class CallService {
         });
         break;
       case 'call_ice_candidate':
-        await this.handleSignalingMessage(payload.fromWhisperId, {
-          type: 'ice_candidate',
-          callId: payload.callId,
-          candidate: JSON.parse(payload.candidate),
-        });
+        try {
+          const candidate = typeof payload.candidate === 'string'
+            ? JSON.parse(payload.candidate)
+            : payload.candidate;
+          await this.handleSignalingMessage(payload.fromWhisperId, {
+            type: 'ice_candidate',
+            callId: payload.callId,
+            candidate,
+          });
+        } catch (parseError) {
+          console.error('[CallService] Failed to parse ICE candidate:', parseError);
+        }
         break;
       case 'call_ended':
         await this.handleSignalingMessage(payload.fromWhisperId, {

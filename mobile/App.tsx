@@ -8,9 +8,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { secureStorage } from './src/storage/SecureStorage';
-import { callService } from './src/services/CallService';
 import { messagingService } from './src/services/MessagingService';
-import { navigationRef, navigate } from './src/utils/navigationRef';
+import { navigationRef } from './src/utils/navigationRef';
 
 // Import screens
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -63,42 +62,8 @@ function RootNavigator() {
     };
   }, []);
 
-  // Set up global incoming call handler
-  useEffect(() => {
-    if (!isAuthenticated) return;
-
-    const handleIncomingCall = async (callId: string, contactId: string, isVideo: boolean) => {
-      console.log('[App] Incoming call:', { callId, contactId, isVideo });
-
-      // Get contact info for the call screen
-      const contacts = await secureStorage.getContacts();
-      const contact = contacts.find(c => c.whisperId === contactId);
-
-      // Navigate to appropriate call screen with callId
-      // Use setTimeout to ensure navigation happens after any current navigation completes
-      setTimeout(() => {
-        if (isVideo) {
-          navigate('VideoCall', {
-            contactId,
-            isIncoming: true,
-            callId, // Required for accepting the call
-          });
-        } else {
-          navigate('Call', {
-            contactId,
-            isIncoming: true,
-            callId, // Required for accepting the call
-          });
-        }
-      }, 100);
-    };
-
-    callService.setIncomingCallHandler(handleIncomingCall);
-
-    return () => {
-      callService.setIncomingCallHandler(null);
-    };
-  }, [isAuthenticated]);
+  // NOTE: Incoming call handler is set up in AuthContext.tsx to avoid duplicate registration
+  // AuthContext handler also shows notification before navigating
 
   const checkAppLock = async () => {
     if (!isAuthenticated) {

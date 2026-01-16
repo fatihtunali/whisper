@@ -1,6 +1,16 @@
 import * as SecureStore from 'expo-secure-store';
 import { LocalUser, Contact, Conversation, Message, Group, GroupConversation } from '../types';
 
+// Safe JSON parse helper - returns null on parse failure instead of crashing
+function safeJsonParse<T>(data: string, fallback: T | null = null): T | null {
+  try {
+    return JSON.parse(data) as T;
+  } catch (error) {
+    console.error('[SecureStorage] JSON parse error:', error);
+    return fallback;
+  }
+}
+
 const KEYS = {
   USER: 'whisper_user',
   CONTACTS: 'whisper_contacts',
@@ -64,7 +74,7 @@ class SecureStorage {
   async getUser(): Promise<LocalUser | null> {
     const data = await SecureStore.getItemAsync(KEYS.USER);
     if (!data) return null;
-    return JSON.parse(data) as LocalUser;
+    return safeJsonParse<LocalUser>(data);
   }
 
   async deleteUser(): Promise<void> {
@@ -79,7 +89,7 @@ class SecureStorage {
   async getContacts(): Promise<Contact[]> {
     const data = await SecureStore.getItemAsync(KEYS.CONTACTS);
     if (!data) return [];
-    return JSON.parse(data) as Contact[];
+    return safeJsonParse<Contact[]>(data, []) || [];
   }
 
   async addContact(contact: Contact): Promise<void> {
@@ -119,7 +129,7 @@ class SecureStorage {
   async getConversations(): Promise<Conversation[]> {
     const data = await SecureStore.getItemAsync(KEYS.CONVERSATIONS);
     if (!data) return [];
-    return JSON.parse(data) as Conversation[];
+    return safeJsonParse<Conversation[]>(data, []) || [];
   }
 
   async getOrCreateConversation(contactId: string): Promise<Conversation> {
@@ -183,7 +193,7 @@ class SecureStorage {
   async getMessages(conversationId: string): Promise<Message[]> {
     const data = await SecureStore.getItemAsync(KEYS.MESSAGES_PREFIX + conversationId);
     if (!data) return [];
-    return JSON.parse(data) as Message[];
+    return safeJsonParse<Message[]>(data, []) || [];
   }
 
   async addMessage(conversationId: string, message: Message): Promise<void> {
@@ -288,7 +298,10 @@ class SecureStorage {
       // Default all to true
       return { readReceipts: true, typingIndicator: true, showOnlineStatus: true };
     }
-    const settings = JSON.parse(data) as PrivacySettings;
+    const settings = safeJsonParse<PrivacySettings>(data);
+    if (!settings) {
+      return { readReceipts: true, typingIndicator: true, showOnlineStatus: true };
+    }
     // Handle migration from older versions without showOnlineStatus
     if (settings.showOnlineStatus === undefined) {
       settings.showOnlineStatus = true;
@@ -306,7 +319,7 @@ class SecureStorage {
     if (!data) {
       return { enabled: false, useBiometrics: false };
     }
-    return JSON.parse(data) as AppLockSettings;
+    return safeJsonParse<AppLockSettings>(data) || { enabled: false, useBiometrics: false };
   }
 
   async setAppLockSettings(settings: AppLockSettings): Promise<void> {
@@ -326,7 +339,13 @@ class SecureStorage {
         showPreview: true,
       };
     }
-    return JSON.parse(data) as NotificationSettings;
+    return safeJsonParse<NotificationSettings>(data) || {
+      enabled: true,
+      messageSound: 'default',
+      callRingtone: 'default',
+      vibrate: true,
+      showPreview: true,
+    };
   }
 
   async setNotificationSettings(settings: NotificationSettings): Promise<void> {
@@ -383,7 +402,7 @@ class SecureStorage {
   async getGroups(): Promise<Group[]> {
     const data = await SecureStore.getItemAsync(KEYS.GROUPS);
     if (!data) return [];
-    return JSON.parse(data) as Group[];
+    return safeJsonParse<Group[]>(data, []) || [];
   }
 
   // Save all groups
@@ -434,7 +453,7 @@ class SecureStorage {
   async getGroupConversations(): Promise<GroupConversation[]> {
     const data = await SecureStore.getItemAsync(KEYS.GROUP_CONVERSATIONS);
     if (!data) return [];
-    return JSON.parse(data) as GroupConversation[];
+    return safeJsonParse<GroupConversation[]>(data, []) || [];
   }
 
   // Save all group conversations
@@ -501,7 +520,7 @@ class SecureStorage {
   async getGroupMessages(groupId: string): Promise<Message[]> {
     const data = await SecureStore.getItemAsync(KEYS.GROUP_MESSAGES_PREFIX + groupId);
     if (!data) return [];
-    return JSON.parse(data) as Message[];
+    return safeJsonParse<Message[]>(data, []) || [];
   }
 
   // Save messages for a group
@@ -555,20 +574,27 @@ class SecureStorage {
 
   // Clear all data
   async clearAll(): Promise<void> {
+    // IMPORTANT: Read conversation and group IDs BEFORE deleting them
+    // so we can clean up individual message stores
+    const conversations = await this.getConversations();
+    const groups = await this.getGroups();
+
+    // Delete main data stores
     await SecureStore.deleteItemAsync(KEYS.USER);
     await SecureStore.deleteItemAsync(KEYS.CONTACTS);
     await SecureStore.deleteItemAsync(KEYS.CONVERSATIONS);
     await SecureStore.deleteItemAsync(KEYS.PRIVACY_SETTINGS);
     await SecureStore.deleteItemAsync(KEYS.APP_LOCK_SETTINGS);
+    await SecureStore.deleteItemAsync(KEYS.NOTIFICATION_SETTINGS);
     await SecureStore.deleteItemAsync(KEYS.GROUPS);
     await SecureStore.deleteItemAsync(KEYS.GROUP_CONVERSATIONS);
-    // Note: Individual message stores need to be cleared based on conversation IDs
-    const conversations = await this.getConversations();
+
+    // Delete individual message stores
     for (const conv of conversations) {
       await SecureStore.deleteItemAsync(KEYS.MESSAGES_PREFIX + conv.id);
     }
-    // Clear group messages
-    const groups = await this.getGroups();
+
+    // Delete group message stores
     for (const group of groups) {
       await SecureStore.deleteItemAsync(KEYS.GROUP_MESSAGES_PREFIX + group.id);
     }

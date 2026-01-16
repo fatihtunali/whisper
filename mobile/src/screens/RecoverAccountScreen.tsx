@@ -8,7 +8,10 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Platform,
+  Modal,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthStackParamList } from '../types';
@@ -63,21 +66,24 @@ export default function RecoverAccountScreen({ navigation }: Props) {
     }
   };
 
-  const handlePaste = () => {
-    Alert.prompt(
-      'Paste Recovery Phrase',
-      'Paste your 12-word recovery phrase',
-      (text) => {
-        if (text) {
-          const pastedWords = text.toLowerCase().trim().split(/\s+/);
-          if (pastedWords.length === 12) {
-            setWords(pastedWords);
-          } else {
-            setError('Please paste exactly 12 words');
-          }
+  const handlePaste = async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (text) {
+        const pastedWords = text.toLowerCase().trim().split(/\s+/);
+        if (pastedWords.length === 12) {
+          setWords(pastedWords);
+          setError('');
+        } else {
+          setError('Clipboard must contain exactly 12 words');
         }
+      } else {
+        setError('Clipboard is empty');
       }
-    );
+    } catch (err) {
+      console.error('[RecoverAccount] Clipboard error:', err);
+      setError('Failed to read clipboard');
+    }
   };
 
   return (

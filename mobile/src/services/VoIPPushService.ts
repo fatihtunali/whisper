@@ -91,13 +91,23 @@ class VoIPPushService {
       VoipPushNotification.addEventListener('notification', (notification: any) => {
         console.log('[VoIPPushService] VoIP push received:', notification);
 
-        // Process the notification
-        if (this.onNotification) {
-          this.onNotification(notification);
+        // CRITICAL: Always call completion handler, even if processing fails
+        // iOS will throttle/disable VoIP push if we don't call this
+        try {
+          // Process the notification
+          if (this.onNotification) {
+            this.onNotification(notification);
+          }
+        } catch (error) {
+          console.error('[VoIPPushService] Error processing VoIP notification:', error);
+        } finally {
+          // IMPORTANT: Must ALWAYS call this to let iOS know we've handled the push
+          try {
+            VoipPushNotification.onVoipNotificationCompleted(notification.uuid);
+          } catch (completionError) {
+            console.error('[VoIPPushService] Error calling completion handler:', completionError);
+          }
         }
-
-        // IMPORTANT: Must call this to let iOS know we've handled the push
-        VoipPushNotification.onVoipNotificationCompleted(notification.uuid);
       });
 
       // Handle when app receives call from background/killed state
