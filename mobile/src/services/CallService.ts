@@ -857,22 +857,41 @@ class CallService {
 
       console.log('[CallService] Creating RTCPeerConnection...');
 
-      // Wrap the native RTCPeerConnection creation in try-catch
-      // This is where native crashes often occur
-      try {
-        this.peerConnection = new RTCPeerConnection({
-          iceServers,
-        }) as unknown as RTCPeerConnection;
-      } catch (peerConnectionError) {
-        console.error('[CallService] Native RTCPeerConnection creation failed:', peerConnectionError);
-        this.peerConnection = null;
-        throw new Error('Failed to create peer connection - native error');
+      // CRITICAL: Wrap RTCPeerConnection instantiation with retry mechanism
+      // This prevents TurboModule NSException crashes from reaching Hermes
+      let peerConnection: any = null;
+      let creationError: Error | null = null;
+      const maxRetries = 2;
+
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          console.log(`[CallService] RTCPeerConnection creation attempt ${attempt}/${maxRetries}`);
+          peerConnection = new RTCPeerConnection({ iceServers });
+
+          if (peerConnection) {
+            console.log('[CallService] RTCPeerConnection created successfully');
+            creationError = null;
+            break;
+          }
+        } catch (error) {
+          creationError = error as Error;
+          console.error(`[CallService] RTCPeerConnection attempt ${attempt} failed:`, creationError?.message || error);
+
+          // Wait before retry to let event loop clear any pending native errors
+          if (attempt < maxRetries) {
+            console.log('[CallService] Waiting before retry...');
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
       }
 
-      if (!this.peerConnection) {
-        throw new Error('RTCPeerConnection is null after creation');
+      if (!peerConnection) {
+        const errorMsg = creationError?.message || 'Unknown error';
+        console.error('[CallService] All RTCPeerConnection creation attempts failed:', errorMsg);
+        throw new Error(`Failed to create peer connection after ${maxRetries} attempts: ${errorMsg}`);
       }
-      console.log('[CallService] RTCPeerConnection created successfully');
+
+      this.peerConnection = peerConnection as unknown as RTCPeerConnection;
 
     // Handle ICE candidates - wrapped in try-catch to prevent native crashes
     (this.peerConnection as any).onicecandidate = (event: any) => {
@@ -1431,6 +1450,10 @@ class CallService {
       // Clear pending ICE candidates
       this.pendingIceCandidates = [];
 
+      // Clear TURN credentials cache to ensure fresh credentials for next call
+      this.turnCredentials = null;
+      this.turnCredentialsExpiry = 0;
+
       // Remove audio event listeners (headphone button support)
       this.removeAudioEventListeners();
 
@@ -1439,7 +1462,10 @@ class CallService {
         this.currentSession = null;
       }
 
-      console.log('[CallService] Cleanup complete');
+      // Small delay to ensure all resources are released before allowing new calls
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      console.log('[CallService] Cleanup complete - ready for new call');
     } finally {
       // ALWAYS reset cleanup flag, even if an error occurred
       this.isCleaningUp = false;
@@ -1549,6 +1575,10 @@ class CallService {
       this.pendingIceCandidates = [];
       this.currentSession = null;
 
+      // Clear TURN credentials cache
+      this.turnCredentials = null;
+      this.turnCredentialsExpiry = 0;
+
       // Remove audio event listeners
       this.removeAudioEventListeners();
 
@@ -1561,7 +1591,10 @@ class CallService {
         }
       }
 
-      console.log('[CallService] Force reset complete');
+      // Small delay before allowing new calls
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      console.log('[CallService] Force reset complete - ready for new call');
     } finally {
       // ALWAYS reset cleanup flag
       this.isCleaningUp = false;

@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sarjmobile.whisper",
-      "buildNumber": "37",
+      "buildNumber": "38",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Whisper needs camera access to scan QR codes when adding contacts and to enable video calls with your contacts.",
@@ -35,7 +35,7 @@
       "edgeToEdgeEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.sarjmobile.whisper",
-      "versionCode": 37,
+      "versionCode": 38,
       "googleServicesFile": "./android/google-services.json",
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
@@ -64,7 +64,18 @@
           "enableBackgroundRemoteNotifications": true
         }
       ],
-      "./plugins/withVoipPushDelegate.js"
+      "./plugins/withVoipPushDelegate.js",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "newArchEnabled": false
+          },
+          "android": {
+            "newArchEnabled": false
+          }
+        }
+      ]
     ]
   }
 }
