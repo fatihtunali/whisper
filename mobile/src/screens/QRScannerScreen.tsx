@@ -70,9 +70,8 @@ export default function QRScannerScreen() {
               addedAt: Date.now(),
             };
             await secureStorage.addContact(contact);
-            Alert.alert('Success', 'Contact added! Start chatting now.', [
-              { text: 'OK', onPress: () => navigation.replace('Chat', { contactId: contact.whisperId }) },
-            ]);
+            // Navigate directly to chat - Alert inside callback can fail on iOS
+            navigation.replace('Chat', { contactId: contact.whisperId });
           },
         },
       ]
