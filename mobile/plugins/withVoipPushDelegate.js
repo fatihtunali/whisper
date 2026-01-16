@@ -147,52 +147,50 @@ function modifySwiftAppDelegate(contents) {
     );
   }
 
-  // 2. Add PKPushRegistryDelegate conformance to AppDelegate class
-  // Handle various class declaration patterns
-  if (!contents.includes('PKPushRegistryDelegate')) {
-    // Pattern 1: class AppDelegate: EXAppDelegateWrapper {
-    contents = contents.replace(
-      /class\s+AppDelegate\s*:\s*EXAppDelegateWrapper\s*\{/,
-      'class AppDelegate: EXAppDelegateWrapper, PKPushRegistryDelegate {'
-    );
-
-    // Pattern 2: class AppDelegate: ExpoAppDelegate { (some SDK versions)
-    contents = contents.replace(
-      /class\s+AppDelegate\s*:\s*ExpoAppDelegate\s*\{/,
-      'class AppDelegate: ExpoAppDelegate, PKPushRegistryDelegate {'
-    );
-  }
-
-  // 3. Add VoIP registration in didFinishLaunchingWithOptions
+  // 2. Add VoIP registration in didFinishLaunchingWithOptions
   if (!contents.includes('RNVoipPushNotificationManager.voipRegistration')) {
-    // Find the didFinishLaunchingWithOptions method and add registration
-    const didFinishPattern = /(func\s+application\s*\(\s*_\s+application:\s*UIApplication\s*,\s*didFinishLaunchingWithOptions\s+launchOptions:\s*\[UIApplication\.LaunchOptionsKey\s*:\s*Any\]\?\s*(?:=\s*nil\s*)?\)\s*->\s*Bool\s*\{)/;
+    // Find the didFinishLaunchingWithOptions method and add registration after super call
+    // Pattern for: return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    const superCallPattern = /(return\s+super\.application\s*\(\s*application\s*,\s*didFinishLaunchingWithOptions\s*:\s*launchOptions\s*\))/;
 
-    if (didFinishPattern.test(contents)) {
+    if (superCallPattern.test(contents)) {
       contents = contents.replace(
-        didFinishPattern,
-        `$1
+        superCallPattern,
+        `// VoIP Push Registration - must be called early
+    RNVoipPushNotificationManager.voipRegistration()
+
+    $1`
+      );
+    } else {
+      // Alternative: try to add after the opening of didFinishLaunchingWithOptions
+      const didFinishPattern = /(func\s+application\s*\(\s*_\s+application:\s*UIApplication\s*,\s*didFinishLaunchingWithOptions\s+launchOptions:\s*\[UIApplication\.LaunchOptionsKey\s*:\s*Any\]\?\s*(?:=\s*nil\s*)?\)\s*->\s*Bool\s*\{)/;
+
+      if (didFinishPattern.test(contents)) {
+        contents = contents.replace(
+          didFinishPattern,
+          `$1
     // VoIP Push Registration - must be called early
     RNVoipPushNotificationManager.voipRegistration()
 `
-      );
+        );
+      }
     }
   }
 
-  // 4. Add PKPushRegistryDelegate methods before the last closing brace
-  if (!contents.includes('func pushRegistry(_ registry: PKPushRegistry, didUpdate')) {
-    const delegateMethods = `
+  // 3. Add PKPushRegistryDelegate as an extension at the end of the file
+  // This is cleaner than modifying the class declaration
+  if (!contents.includes('extension AppDelegate: PKPushRegistryDelegate')) {
+    const delegateExtension = `
 
-  // MARK: - PKPushRegistryDelegate
+// MARK: - PKPushRegistryDelegate Extension
+extension AppDelegate: PKPushRegistryDelegate {
 
-  /// Called when VoIP push credentials are updated
-  func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
+  public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
     print("[Whisper] VoIP Push credentials updated for type: \\(type.rawValue)")
-    RNVoipPushNotificationManager.didUpdate(pushCredentials, for: type.rawValue)
+    RNVoipPushNotificationManager.didUpdatePushCredentials(pushCredentials, forType: type.rawValue)
   }
 
-  /// Called when a VoIP push notification is received (iOS 13+)
-  func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
+  public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
     print("[Whisper] VoIP Push received with payload: \\(payload.dictionaryPayload)")
 
     // Extract call UUID from payload or generate one
@@ -202,20 +200,17 @@ function modifySwiftAppDelegate(contents) {
     RNVoipPushNotificationManager.addCompletionHandler(uuid, completionHandler: completion)
 
     // Process the incoming push
-    RNVoipPushNotificationManager.didReceiveIncomingPush(with: payload, for: type.rawValue)
+    RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload: payload, forType: type.rawValue)
   }
 
-  /// Called when VoIP push token is invalidated
-  func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
+  public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
     print("[Whisper] VoIP Push token invalidated for type: \\(type.rawValue)")
   }
+}
 `;
 
-    // Find the last closing brace of the class and insert before it
-    const lastBraceIndex = contents.lastIndexOf('}');
-    if (lastBraceIndex !== -1) {
-      contents = contents.slice(0, lastBraceIndex) + delegateMethods + '\n' + contents.slice(lastBraceIndex);
-    }
+    // Append extension to the end of the file
+    contents = contents + delegateExtension;
   }
 
   return contents;

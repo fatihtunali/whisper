@@ -4,9 +4,13 @@
 
 Whisper is a complete privacy-first, end-to-end encrypted messaging application that enables secure communication without requiring any personal information. Users communicate via anonymous "Whisper IDs" (WSP-XXXX-XXXX-XXXX) without phone numbers, emails, or any identifiable data.
 
-**Current Version:** v20 (Build 20)
+**Current Version:** v21 (Build 21)
 **Status:** Production Ready
 **Last Updated:** January 16, 2026
+
+### Design Philosophy
+
+Whisper prioritizes **identity continuity**, **recoverability**, and **operational simplicity** over perfect forward secrecy. It is designed for real-world reliability under mobile constraints—not adversarial nation-state resistance. Users can recover their identity with a 12-word seed phrase, messages are encrypted with proven primitives (NaCl), and the server operates as a zero-knowledge relay. This approach favors practical privacy for everyday users over cryptographic perfection.
 
 ---
 
@@ -164,6 +168,7 @@ whisper/
 | Symmetric Encryption | XSalsa20-Poly1305 | TweetNaCl |
 | Message Signing | Ed25519 | TweetNaCl |
 | Key Derivation | BIP39 Mnemonic | bip39 |
+| Random Nonces | 24-byte random | TweetNaCl (nacl.randomBytes) |
 
 ### Key Generation
 
@@ -194,6 +199,98 @@ The server has **zero knowledge** of message content:
 3. No PII collected or stored
 4. Contact lists stored locally only
 5. Chat history stored locally only
+
+### Threat Model
+
+**In Scope (Protected Against):**
+- Server compromise: Attacker with full server access cannot read message content
+- Network eavesdropping: All messages encrypted end-to-end
+- Replay attacks: Challenge-response authentication with Ed25519 signatures
+- Identity spoofing: Messages cryptographically signed by sender
+- Unauthorized account deletion: Requires signature from account's private key
+
+**Out of Scope (Not Protected Against):**
+- Device compromise: If attacker has access to unlocked device, they can read messages
+- Endpoint security: Malware on user's device can access decrypted content
+- Traffic analysis: Server sees who communicates with whom (Whisper IDs), message timing, and sizes
+- Social engineering: Users can be tricked into adding malicious contacts
+
+**Visible Metadata:**
+- Whisper IDs of sender and recipient
+- Timestamp of message transmission
+- Message size (encrypted blob length)
+- Online/offline status (unless hidden in privacy settings)
+- Group membership (server routes group messages)
+
+**Metadata Minimization (Current Scope):**
+Advanced traffic analysis mitigations are **not currently implemented**:
+- Message padding (fixed-size packets): Not planned
+- Delayed/batched delivery: Not planned
+- Decoy traffic: Not planned
+
+These techniques add complexity and latency with diminishing returns for our threat model. Whisper focuses on content encryption and anonymous identities rather than traffic analysis resistance. This may change if user demand or threat landscape evolves.
+
+**Security Contact:** If you discover vulnerabilities in Whisper's security model, please report them responsibly to security@sarjmobile.com.
+
+### Key Lifecycle
+
+**Key Generation:**
+- Encryption: X25519 key pair (Curve25519)
+- Signing: Ed25519 key pair (separate from encryption)
+- Both derived deterministically from 12-word BIP39 seed phrase
+
+**Key Storage:**
+- Private keys stored in device secure enclave (iOS Keychain / Android Keystore)
+- Public keys registered with server for message routing
+- Seed phrase shown once at account creation for backup
+
+**Device Change / Recovery:**
+- Enter 12-word seed phrase on new device
+- Same key pairs regenerated deterministically
+- All contacts and message history remain on original device (not synced)
+
+**Multi-Device:**
+- Currently single-device only
+- Same identity can only be active on one device at a time
+- Logging in on new device disconnects previous device
+
+**Key Rotation:**
+- Not currently implemented
+- Same key pair used for lifetime of account
+- Future consideration: periodic rotation with key announcement protocol
+
+### Group Key Management
+
+**Current Implementation:**
+- Groups use pairwise encryption (each message encrypted separately for each member)
+- No shared group key or sender keys
+- Server fans out encrypted copies to each group member
+
+**Member Changes:**
+- Adding member: New member can only see messages sent after joining
+- Removing member: Removed member cannot decrypt future messages (no re-key needed due to pairwise encryption)
+- No backward secrecy for removed members (they keep messages received before removal)
+
+**Trade-offs:**
+- Pairwise encryption is simpler and doesn't require complex key management
+- Scales O(n) with group size for each message
+- Suitable for small groups; large groups may experience latency
+
+### Forward Secrecy
+
+**Current State:** Whisper does **not** implement forward secrecy.
+
+Each conversation uses the same long-term X25519 key pair. If a private key is compromised in the future, an attacker with stored ciphertext could decrypt past messages.
+
+**Why This Trade-off:**
+- Simplicity: No ratcheting protocol complexity
+- Seed phrase recovery: Users can restore their identity with 12 words
+- Stateless encryption: No session state to synchronize between devices
+
+**Mitigations:**
+- Disappearing messages: Auto-delete reduces window of exposure
+- Device secure storage: Private keys protected by hardware security modules
+- Future consideration: Double Ratchet protocol (like Signal) for enhanced security
 
 ---
 
@@ -741,6 +838,7 @@ APNS_PRODUCTION=true
 | v18 | 18 | Jan 2026 | Comprehensive call safety fixes |
 | v19 | 19 | Jan 2026 | Remove newArchEnabled for Expo Go compatibility |
 | v20 | 20 | Jan 2026 | iOS VoIP Push fix, Android call notifications, headphone support |
+| v21 | 21 | Jan 2026 | Swift extension approach for PKPushRegistryDelegate, security documentation |
 
 ### Major Bug Fixes (v15)
 
