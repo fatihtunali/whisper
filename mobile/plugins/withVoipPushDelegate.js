@@ -61,6 +61,7 @@ function withVoipBridgingHeader(config) {
 
       // Content to add
       const voipImport = '#import "RNVoipPushNotificationManager.h"';
+      const callkeepImport = '#import "RNCallKeep.h"';
 
       let headerContent = '';
 
@@ -69,6 +70,9 @@ function withVoipBridgingHeader(config) {
         headerContent = fs.readFileSync(bridgingHeaderPath, 'utf8');
         if (!headerContent.includes(voipImport)) {
           headerContent += `\n${voipImport}\n`;
+        }
+        if (!headerContent.includes(callkeepImport)) {
+          headerContent += `${callkeepImport}\n`;
         }
       } else {
         // Create new bridging header
@@ -82,6 +86,7 @@ function withVoipBridgingHeader(config) {
 #import <React/RCTBridgeModule.h>
 #import <React/RCTEventEmitter.h>
 ${voipImport}
+${callkeepImport}
 `;
       }
 
@@ -187,7 +192,7 @@ extension AppDelegate: PKPushRegistryDelegate {
 
   public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
     print("[Whisper] VoIP Push credentials updated for type: \\(type.rawValue)")
-    RNVoipPushNotificationManager.didUpdate(pushCredentials, for: type.rawValue)
+    RNVoipPushNotificationManager.didUpdatePushCredentials(pushCredentials, forType: type.rawValue)
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
@@ -197,13 +202,20 @@ extension AppDelegate: PKPushRegistryDelegate {
     let callerName = payload.dictionaryPayload["fromWhisperId"] as? String ?? "Incoming Call"
     let hasVideo = payload.dictionaryPayload["isVideo"] as? Bool ?? false
 
-    RNVoipPushNotificationManager.reportNewIncomingCall(
-      withUUID: uuidString,
+    // Report to CallKit via RNCallKeep (triggers native call UI)
+    RNCallKeep.reportNewIncomingCall(
+      uuidString,
       handle: callerName,
+      handleType: "generic",
       hasVideo: hasVideo,
+      localizedCallerName: callerName,
+      fromPushKit: true,
       payload: payload.dictionaryPayload,
-      completion: completion
+      withCompletionHandler: completion
     )
+
+    // Forward to VoIP manager for JS event
+    RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload: payload, forType: type.rawValue)
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
