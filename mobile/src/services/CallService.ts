@@ -643,8 +643,19 @@ class CallService {
     this.notifyStateChange('ended');
     console.log('[CallService] Call ended');
 
-    // Run cleanup with stored session info (isCleaningUp already set)
-    await this.cleanup(sessionToClean, true);
+    // Run cleanup with timeout to prevent hanging
+    try {
+      const cleanupPromise = this.cleanup(sessionToClean, true);
+      const timeoutPromise = new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('Cleanup timeout')), 5000)
+      );
+      await Promise.race([cleanupPromise, timeoutPromise]);
+    } catch (e) {
+      console.warn('[CallService] Cleanup timed out or failed:', e);
+      // Force reset the cleanup flag if it got stuck
+      this.isCleaningUp = false;
+      this.cleanupCompleteTime = Date.now();
+    }
   }
 
   // Toggle mute
@@ -777,16 +788,24 @@ class CallService {
 
   // Private: Create peer connection
   private async createPeerConnection(): Promise<void> {
-    // Dynamically import react-native-webrtc
-    const { RTCPeerConnection, MediaStream: RNMediaStream } = await import('react-native-webrtc');
+    try {
+      // Dynamically import react-native-webrtc
+      console.log('[CallService] Importing WebRTC module...');
+      const { RTCPeerConnection, MediaStream: RNMediaStream } = await import('react-native-webrtc');
+      console.log('[CallService] WebRTC module imported successfully');
 
-    // Get ICE servers with TURN credentials
-    const iceServers = await this.getIceServers();
-    console.log('[CallService] Using ICE servers:', iceServers.map(s => s.urls));
+      // Small delay to let any previous operations settle
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-    this.peerConnection = new RTCPeerConnection({
-      iceServers,
-    }) as unknown as RTCPeerConnection;
+      // Get ICE servers with TURN credentials
+      const iceServers = await this.getIceServers();
+      console.log('[CallService] Using ICE servers:', iceServers.map(s => s.urls));
+
+      console.log('[CallService] Creating RTCPeerConnection...');
+      this.peerConnection = new RTCPeerConnection({
+        iceServers,
+      }) as unknown as RTCPeerConnection;
+      console.log('[CallService] RTCPeerConnection created successfully');
 
     // Handle ICE candidates
     (this.peerConnection as any).onicecandidate = (event: any) => {
@@ -868,6 +887,10 @@ class CallService {
     };
 
     console.log('[CallService] Peer connection created');
+    } catch (error) {
+      console.error('[CallService] Failed to create peer connection:', error);
+      throw error;
+    }
   }
 
   // Private: Process pending ICE candidates
