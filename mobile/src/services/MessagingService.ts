@@ -161,7 +161,11 @@ class MessagingService {
   setPushToken(token: string | null): void {
     const hadToken = !!this.pushToken;
     this.pushToken = token;
-    console.log('[MessagingService] Push token set:', token ? 'yes' : 'no');
+    console.log('[MessagingService] Push token set:', token ? 'yes' : 'no',
+      'hadToken:', hadToken,
+      'isConnected:', this.isConnected(),
+      'isRegistering:', this.isRegistering,
+      'wsState:', this.ws?.readyState);
 
     // Re-register if connected and token changed
     if (token && !hadToken && this.isConnected()) {
@@ -173,6 +177,8 @@ class MessagingService {
         console.log('[MessagingService] Re-registering with new push token');
         this.register();
       }
+    } else if (token && !hadToken) {
+      console.log('[MessagingService] WARNING: Got push token but not connected yet, token will be sent on next connect');
     }
   }
 

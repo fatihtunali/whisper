@@ -63,11 +63,16 @@ class NotificationService {
       }
 
       // Get Expo push token
-      const tokenData = await Notifications.getExpoPushTokenAsync({
-        projectId: '395d7567-88ca-4a3e-bb59-676bda71ba5e', // From app.json
-      });
-      this.pushToken = tokenData.data;
-      console.log('[NotificationService] Push token:', this.pushToken);
+      try {
+        const tokenData = await Notifications.getExpoPushTokenAsync({
+          projectId: '395d7567-88ca-4a3e-bb59-676bda71ba5e', // From app.json
+        });
+        this.pushToken = tokenData.data;
+        console.log('[NotificationService] Push token obtained:', this.pushToken);
+      } catch (tokenError) {
+        console.error('[NotificationService] Failed to get Expo push token:', tokenError);
+        // Continue without push token - other features may still work
+      }
 
       // Set up Android notification channels
       if (Platform.OS === 'android') {
@@ -98,8 +103,8 @@ class NotificationService {
         console.warn('[NotificationService] CallKeep initialization failed (native module may not be available):', e);
       }
 
-      // Set platform on messaging service
-      messagingService.setPlatform(Platform.OS as 'ios' | 'android' | 'unknown');
+      // NOTE: Platform is now set by AuthContext BEFORE calling initialize()
+      // Don't set it here as it can trigger re-registration before push token is ready
 
       // Initialize VoIP push for iOS (non-blocking, gracefully handles unavailability)
       if (Platform.OS === 'ios') {
@@ -129,10 +134,12 @@ class NotificationService {
         }
       }
 
+      console.log('[NotificationService] Initialization complete, returning push token:', this.pushToken ? 'present' : 'null');
       return this.pushToken;
     } catch (error) {
       console.error('[NotificationService] Error initializing:', error);
-      return null;
+      // Return any push token we managed to get before the error
+      return this.pushToken;
     }
   }
 
