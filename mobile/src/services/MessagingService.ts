@@ -1174,7 +1174,13 @@ class MessagingService {
     replyTo?: { messageId: string; content: string; senderId: string };
     senderPublicKey?: string; // For message requests from unknown senders
   }): Promise<void> {
-    if (!this.user) return;
+    console.log('[MessagingService] handleIncomingMessage called, messageId:', payload.messageId);
+    console.log('[MessagingService] from:', payload.fromWhisperId, 'hasContent:', !!payload.encryptedContent);
+
+    if (!this.user) {
+      console.error('[MessagingService] No user set, cannot process message');
+      return;
+    }
 
     const {
       messageId, fromWhisperId, encryptedContent, nonce, timestamp,
@@ -1281,18 +1287,31 @@ class MessagingService {
     // Decrypt text content (may be empty for voice/file messages)
     let content = '';
     if (encryptedContent) {
+      console.log('[MessagingService] Attempting to decrypt message from', fromWhisperId);
+      console.log('[MessagingService] Using contact publicKey:', contact.publicKey?.substring(0, 20) + '...');
+      console.log('[MessagingService] Encrypted content length:', encryptedContent?.length);
+      console.log('[MessagingService] Nonce length:', nonce?.length);
+
       const decryptedContent = cryptoService.decryptMessage(
         encryptedContent,
         nonce,
         this.user.privateKey,
         contact.publicKey
       );
+
+      if (decryptedContent === null) {
+        console.error('[MessagingService] Decryption returned null - key mismatch or corrupted data');
+        console.error('[MessagingService] Contact publicKey:', contact.publicKey);
+        console.error('[MessagingService] Sender publicKey from payload:', senderPublicKey);
+      }
+
       content = decryptedContent || '';
     }
 
     // For voice/image/file-only messages, we may have no text content
     if (!content && !voice && !image && !file) {
       console.error('[MessagingService] Failed to decrypt message - no content, voice, image, or file');
+      console.error('[MessagingService] messageId:', messageId, 'from:', fromWhisperId);
       return;
     }
 
@@ -1476,10 +1495,19 @@ class MessagingService {
     replyTo?: { messageId: string; content: string; senderId: string };
   }>): Promise<void> {
     console.log('[MessagingService] Processing', messages.length, 'pending messages');
+    console.log('[MessagingService] User state:', this.user ? 'present' : 'MISSING');
 
-    for (const msg of messages) {
-      await this.handleIncomingMessage(msg);
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      console.log(`[MessagingService] Processing pending message ${i + 1}/${messages.length}: ${msg.messageId}`);
+      try {
+        await this.handleIncomingMessage(msg);
+        console.log(`[MessagingService] Successfully processed message ${msg.messageId}`);
+      } catch (error) {
+        console.error(`[MessagingService] Error processing message ${msg.messageId}:`, error);
+      }
     }
+    console.log('[MessagingService] Finished processing pending messages');
   }
 
   // Private: Send WebSocket message
