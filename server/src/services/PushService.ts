@@ -53,7 +53,8 @@ class PushService {
     pushToken: string,
     title: string,
     body: string,
-    data?: Record<string, unknown>
+    data?: Record<string, unknown>,
+    channelId: string = 'messages' // Android channel - 'messages' or 'calls'
   ): Promise<boolean> {
     // Validate Expo push token format
     if (!this.isValidExpoPushToken(pushToken)) {
@@ -67,7 +68,7 @@ class PushService {
       body,
       data,
       sound: 'default',
-      channelId: 'messages', // Android channel
+      channelId, // Android channel - 'calls' channel has bypassDnd and lockscreen visibility
       priority: 'high', // Ensure high priority for immediate delivery
       _contentAvailable: true, // iOS: wake up app in background to process notification
     };
@@ -133,6 +134,7 @@ class PushService {
   }
 
   // Send notification for incoming call (regular push)
+  // Uses 'calls' channel on Android for bypassDnd and lockscreen visibility
   async sendCallNotification(
     pushToken: string,
     fromWhisperId: string,
@@ -142,12 +144,29 @@ class PushService {
     const title = isVideo ? 'Incoming Video Call' : 'Incoming Call';
     const body = `${fromWhisperId.substring(0, 12)}... is calling you`;
 
-    return this.sendNotification(pushToken, title, body, {
-      type: 'incoming_call',
-      fromWhisperId,
-      callId,
-      isVideo,
-    });
+    console.log(`[PushService] Sending call notification to ${pushToken.substring(0, 30)}...`);
+    console.log(`[PushService] Call details: callId=${callId}, from=${fromWhisperId}, isVideo=${isVideo}`);
+
+    const result = await this.sendNotification(
+      pushToken,
+      title,
+      body,
+      {
+        type: 'incoming_call',
+        fromWhisperId,
+        callId,
+        isVideo,
+      },
+      'calls' // Use 'calls' channel for higher priority on Android
+    );
+
+    if (result) {
+      console.log(`[PushService] Call notification sent successfully`);
+    } else {
+      console.error(`[PushService] Failed to send call notification`);
+    }
+
+    return result;
   }
 
   // Send VoIP push notification for iOS (makes phone ring like a real call)

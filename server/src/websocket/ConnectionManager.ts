@@ -91,6 +91,10 @@ class ConnectionManager {
       if (voipToken) {
         await redisService.setVoIPToken(whisperId, voipToken);
       }
+      // Store platform info
+      if (platform) {
+        await redisService.setPlatform(whisperId, platform);
+      }
       // Cache public key
       await redisService.setPublicKey(whisperId, publicKey);
     }
@@ -275,6 +279,14 @@ class ConnectionManager {
 
     // Fallback to MySQL
     return pushTokenStore.getVoIPToken(whisperId);
+  }
+
+  // Get platform for a user (ios/android)
+  async getPlatform(whisperId: string): Promise<string | null> {
+    if (this.useRedis) {
+      return redisService.getPlatform(whisperId);
+    }
+    return null;
   }
 
   // Get public key for a user (works even when offline)

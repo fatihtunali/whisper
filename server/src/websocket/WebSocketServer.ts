@@ -847,12 +847,16 @@ export class WebSocketServer {
 
       console.log(`[WebSocket] ${isVideo ? 'Video' : 'Voice'} call initiated from ${client.whisperId} to ${toWhisperId}`);
     } else {
-      // Recipient offline - try VoIP push for iOS to ring the phone
+      // Recipient offline - send push notifications to wake up their phone
       const voipToken = await connectionManager.getVoIPToken(toWhisperId);
       const pushToken = await connectionManager.getPushToken(toWhisperId);
 
+      console.log(`[WebSocket] Recipient ${toWhisperId} is offline. VoIP token: ${voipToken ? 'yes' : 'no'}, Push token: ${pushToken ? 'yes' : 'no'}`);
+
+      let pushSent = false;
+
+      // For iOS: Try VoIP push first (makes phone ring with native call UI)
       if (voipToken) {
-        // Send VoIP push to make iOS phone ring
         const voipSent = await pushService.sendVoIPPush(
           voipToken,
           client.whisperId,
@@ -861,25 +865,39 @@ export class WebSocketServer {
           callerName
         );
         if (voipSent) {
-          console.log(`[WebSocket] VoIP push sent to offline user ${toWhisperId}`);
-          // Don't send error - the phone might still ring
-          return;
+          console.log(`[WebSocket] VoIP push sent to offline iOS user ${toWhisperId}`);
+          pushSent = true;
+        } else {
+          console.warn(`[WebSocket] VoIP push failed for ${toWhisperId}, will try regular push`);
         }
       }
 
-      // Fallback to regular push notification
+      // Always send regular push notification as well (for Android, and as iOS backup)
+      // Android needs this to show call notification
+      // iOS can use this as backup if VoIP push fails
       if (pushToken) {
-        await pushService.sendCallNotification(
+        const regularPushSent = await pushService.sendCallNotification(
           pushToken,
           client.whisperId,
           callId,
           isVideo || false
         );
-        console.log(`[WebSocket] Push notification sent to offline user ${toWhisperId}`);
+        if (regularPushSent) {
+          console.log(`[WebSocket] Regular push notification sent to offline user ${toWhisperId}`);
+          pushSent = true;
+        } else {
+          console.warn(`[WebSocket] Regular push notification failed for ${toWhisperId}`);
+        }
       }
 
-      // Send error - recipient is truly offline
-      this.sendError(socket, 'RECIPIENT_OFFLINE', 'Recipient is not available');
+      if (pushSent) {
+        // At least one push was sent - don't send error, phone might still ring
+        console.log(`[WebSocket] Call notification sent to ${toWhisperId}, waiting for response...`);
+      } else {
+        // No push could be sent - truly unreachable
+        console.warn(`[WebSocket] No push token available for ${toWhisperId}`);
+        this.sendError(socket, 'RECIPIENT_OFFLINE', 'Recipient is not available');
+      }
     }
   }
 

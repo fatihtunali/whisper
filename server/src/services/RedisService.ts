@@ -21,6 +21,7 @@ const KEYS = {
   REGISTERED: 'whisper:registered:',   // whisper:registered:{whisperId} -> timestamp (installed/registered users)
   PUSH_TOKEN: 'whisper:push:',         // whisper:push:{whisperId} -> pushToken
   VOIP_TOKEN: 'whisper:voip:',         // whisper:voip:{whisperId} -> voipToken
+  PLATFORM: 'whisper:platform:',       // whisper:platform:{whisperId} -> 'ios' | 'android'
   LAST_SEEN: 'whisper:lastseen:',      // whisper:lastseen:{whisperId} -> timestamp
   PUBLIC_KEY: 'whisper:pubkey:',       // whisper:pubkey:{whisperId} -> publicKey
   SIGNING_KEY: 'whisper:signkey:',     // whisper:signkey:{whisperId} -> signingPublicKey
@@ -272,12 +273,29 @@ class RedisService {
   }
 
   /**
+   * Store platform info (ios/android)
+   */
+  async setPlatform(whisperId: string, platform: string): Promise<void> {
+    if (!this.client) return;
+    await this.client.set(KEYS.PLATFORM + whisperId, platform);
+  }
+
+  /**
+   * Get platform info
+   */
+  async getPlatform(whisperId: string): Promise<string | null> {
+    if (!this.client) return null;
+    return this.client.get(KEYS.PLATFORM + whisperId);
+  }
+
+  /**
    * Remove push token
    */
   async removePushToken(whisperId: string): Promise<void> {
     if (!this.client) return;
     await this.client.del(KEYS.PUSH_TOKEN + whisperId);
     await this.client.del(KEYS.VOIP_TOKEN + whisperId);
+    await this.client.del(KEYS.PLATFORM + whisperId);
   }
 
   /**
