@@ -192,7 +192,7 @@ extension AppDelegate: PKPushRegistryDelegate {
 
   public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
     print("[Whisper] VoIP Push credentials updated for type: \\(type.rawValue)")
-    RNVoipPushNotificationManager.didUpdatePushCredentials(pushCredentials, forType: type.rawValue)
+    RNVoipPushNotificationManager.didUpdate(pushCredentials, forType: type.rawValue)
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
@@ -209,13 +209,17 @@ extension AppDelegate: PKPushRegistryDelegate {
       handleType: "generic",
       hasVideo: hasVideo,
       localizedCallerName: callerName,
+      supportsHolding: true,
+      supportsDTMF: true,
+      supportsGrouping: true,
+      supportsUngrouping: true,
       fromPushKit: true,
       payload: payload.dictionaryPayload,
       withCompletionHandler: completion
     )
 
     // Forward to VoIP manager for JS event
-    RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload: payload, forType: type.rawValue)
+    RNVoipPushNotificationManager.didReceiveIncomingPush(with: payload, forType: type.rawValue)
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
