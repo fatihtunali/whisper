@@ -4,9 +4,9 @@
 
 Whisper is a complete privacy-first, end-to-end encrypted messaging application that enables secure communication without requiring any personal information. Users communicate via anonymous "Whisper IDs" (WSP-XXXX-XXXX-XXXX) without phone numbers, emails, or any identifiable data.
 
-**Current Version:** v15 (Build 15)
+**Current Version:** v20 (Build 20)
 **Status:** Production Ready
-**Last Updated:** January 15, 2026
+**Last Updated:** January 16, 2026
 
 ---
 
@@ -378,7 +378,7 @@ class SecureStorage {
     "newArchEnabled": false,
     "ios": {
       "bundleIdentifier": "com.sarjmobile.whisper",
-      "buildNumber": "15",
+      "buildNumber": "20",
       "infoPlist": {
         "UIBackgroundModes": ["voip", "fetch", "remote-notification"],
         "NSCameraUsageDescription": "...",
@@ -388,7 +388,7 @@ class SecureStorage {
     },
     "android": {
       "package": "com.sarjmobile.whisper",
-      "versionCode": 15,
+      "versionCode": 20,
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
@@ -397,7 +397,12 @@ class SecureStorage {
         "android.permission.WAKE_LOCK"
       ]
     },
-    "plugins": ["expo-audio", "expo-video", "expo-notifications"]
+    "plugins": [
+        "expo-audio",
+        "expo-video",
+        "expo-notifications",
+        "./plugins/withVoipPushDelegate.js"  // iOS VoIP Push support
+      ]
   }
 }
 ```
@@ -731,6 +736,11 @@ APNS_PRODUCTION=true
 | v13 | 13 | Jan 2026 | Call ringing status, TypeScript fixes |
 | v14 | 14 | Jan 2026 | Push token registration fix |
 | v15 | 15 | Jan 2026 | iOS crash fix, call race condition fix |
+| v16 | 16 | Jan 2026 | Fix stale call session blocking subsequent calls |
+| v17 | 17 | Jan 2026 | Fix iOS crash on launch - native module init lifecycle |
+| v18 | 18 | Jan 2026 | Comprehensive call safety fixes |
+| v19 | 19 | Jan 2026 | Remove newArchEnabled for Expo Go compatibility |
+| v20 | 20 | Jan 2026 | iOS VoIP Push fix, Android call notifications, headphone support |
 
 ### Major Bug Fixes (v15)
 
@@ -753,6 +763,164 @@ APNS_PRODUCTION=true
 5. **Image/Audio Messages Failing**
    - **Cause**: Invalid `FileSystem.EncodingType.Base64`
    - **Fix**: Changed to string literal `'base64'`
+
+### Major Updates (v20) - January 16, 2026
+
+#### 1. iOS VoIP Push Crash Fix
+
+**Problem**: iOS crash on incoming calls - "unrecognized selector sent to instance" when PushKit tried to call delegate methods that weren't implemented in AppDelegate.
+
+**Root Cause**: `react-native-voip-push-notification` requires native delegate methods in AppDelegate, but Expo SDK 54 uses Swift-based AppDelegate without these methods.
+
+**Solution**: Created custom Expo config plugin `mobile/plugins/withVoipPushDelegate.js`:
+
+```javascript
+// What the plugin does:
+1. Creates bridging header (Whisper-Bridging-Header.h)
+   - Imports RNVoipPushNotificationManager.h
+
+2. Modifies AppDelegate.swift:
+   - Adds `import PushKit`
+   - Adds `PKPushRegistryDelegate` conformance
+   - Implements three delegate methods:
+     * pushRegistry(_:didUpdate:for:) - VoIP token received
+     * pushRegistry(_:didReceiveIncomingPushWith:for:completion:) - Push received
+     * pushRegistry(_:didInvalidatePushTokenFor:) - Token invalidated
+   - Adds RNVoipPushNotificationManager.voipRegistration() in didFinishLaunchingWithOptions
+
+3. Configures Xcode project:
+   - Sets SWIFT_OBJC_BRIDGING_HEADER build setting
+```
+
+**Files Changed**:
+- `mobile/plugins/withVoipPushDelegate.js` (NEW - 297 lines)
+- `mobile/app.json` - Added plugin: `"./plugins/withVoipPushDelegate.js"`
+
+#### 2. Android Call Notification Fix
+
+**Problem**: Android devices weren't receiving call notifications when app was closed/backgrounded.
+
+**Root Cause**:
+1. Call notifications used `messages` channel instead of `calls` channel
+2. `calls` channel has `bypassDnd: true` and `lockscreenVisibility: PUBLIC`
+3. Server was only sending VoIP push (iOS), not regular push for Android
+
+**Solution**:
+
+```typescript
+// server/src/services/PushService.ts
+// Changed sendNotification to accept channelId parameter
+async sendNotification(
+  pushToken: string,
+  title: string,
+  body: string,
+  data?: Record<string, unknown>,
+  channelId: string = 'messages' // NEW: default to messages, calls use 'calls'
+)
+
+// sendCallNotification now uses 'calls' channel
+async sendCallNotification(...) {
+  return this.sendNotification(pushToken, title, body, data, 'calls');
+}
+```
+
+```typescript
+// server/src/websocket/WebSocketServer.ts
+// Always send BOTH VoIP (iOS) AND regular push (Android/iOS backup)
+if (voipToken) {
+  await pushService.sendVoIPPush(...); // iOS native call UI
+}
+if (pushToken) {
+  await pushService.sendCallNotification(...); // Android + iOS backup
+}
+```
+
+**Files Changed**:
+- `server/src/services/PushService.ts` - channelId parameter, detailed logging
+- `server/src/websocket/WebSocketServer.ts` - Always send regular push for calls
+- `server/src/services/RedisService.ts` - Added platform storage
+- `server/src/websocket/ConnectionManager.ts` - Added getPlatform method
+
+#### 3. Platform Info Persistence
+
+**Problem**: Platform info (ios/android) was only stored in memory, lost on server restart.
+
+**Solution**: Added platform storage to Redis:
+
+```typescript
+// server/src/services/RedisService.ts
+KEYS.PLATFORM = 'whisper:platform:' // whisper:platform:{whisperId} -> 'ios' | 'android'
+
+async setPlatform(whisperId: string, platform: string): Promise<void>
+async getPlatform(whisperId: string): Promise<string | null>
+```
+
+**Data Persistence Summary**:
+
+| Data | Storage | Persists Across Restart |
+|------|---------|------------------------|
+| WebSocket connections | Memory | No (expected) |
+| Push tokens | Redis | Yes |
+| VoIP tokens | Redis | Yes |
+| **Platform info** | Redis | **Yes (NEW)** |
+| Public keys | Redis | Yes |
+| Pending messages | Redis (72h TTL) | Yes |
+| Groups | Redis | Yes |
+
+#### 4. Headphone Button Support
+
+**Problem**: Users couldn't answer/end calls using wired or Bluetooth headphone buttons.
+
+**Root Cause**: InCallManager `MediaButton` events weren't being listened to.
+
+**Solution**: Added audio event listeners in CallService:
+
+```typescript
+// mobile/src/services/CallService.ts
+
+// New event subscriptions
+private mediaButtonSubscription: any = null;
+private wiredHeadsetSubscription: any = null;
+
+// New callbacks
+public onHeadphoneAnswer: (() => void) | null = null;
+public onHeadphoneHangup: (() => void) | null = null;
+
+// MediaButton event handling
+setupAudioEventListeners() {
+  emitter.addListener('MediaButton', (data) => {
+    if (data.eventText === 'cycleHeadset') {
+      if (state === 'ringing' && isIncoming) {
+        // Single press on ringing: Answer call
+        this.onHeadphoneAnswer?.();
+      } else if (state === 'connected') {
+        // Single press on connected: End call
+        this.endCall();
+      }
+    } else if (data.eventText === 'cycleHeadsetDouble') {
+      if (state === 'ringing') {
+        // Double press on ringing: Reject call
+        this.rejectCall(callId, contactId);
+      } else {
+        // Double press on connected: End call
+        this.endCall();
+      }
+    }
+  });
+}
+```
+
+**Headphone Button Actions**:
+
+| Button Action | Call State | Result |
+|---------------|------------|--------|
+| Single press | Ringing (incoming) | Answer call |
+| Single press | Connected | End call |
+| Double press | Ringing (incoming) | Reject call |
+| Double press | Connected | End call |
+
+**Files Changed**:
+- `mobile/src/services/CallService.ts` - MediaButton and WiredHeadset event listeners
 
 ---
 
@@ -954,19 +1122,40 @@ Always increment both when making changes:
 
 ## Current Build Status
 
+**v20 Build** (January 16, 2026)
+
+- **Build Status**: Ready for EAS build
+- **iOS**: Requires `eas build --platform ios` (Mac needed for prebuild)
+- **Android**: `eas build --platform android`
+
+### Fixes Included in v20
+
+1. **iOS VoIP Push crash fixed** - PKPushRegistryDelegate config plugin
+2. **Android call notifications fixed** - Uses 'calls' channel with bypassDnd
+3. **Platform info persisted** - Stored in Redis, survives restart
+4. **Headphone button support** - Answer/end calls with headphone buttons
+5. **Improved logging** - Detailed push notification debugging
+
+### Build Instructions (v20)
+
+```bash
+cd mobile
+
+# Push all changes
+git push
+
+# Build iOS (requires Mac or EAS cloud)
+eas build --platform ios --profile production
+
+# Build Android
+eas build --platform android --profile production
+```
+
+### Previous Builds
+
 **v15 Build** (January 15, 2026)
-
-- **Android**: https://expo.dev/accounts/fatihtunali/projects/whisper/builds/fc2e5aa4-aba8-41ae-a801-2addb90b09b1
-- **iOS**: https://expo.dev/accounts/fatihtunali/projects/whisper/builds/77f1319f-686a-4f23-b1eb-748bcef64df2
-
-### Fixes Included in v15
-
-1. iOS crash fixed (newArchEnabled disabled)
-2. Call disconnection race condition fixed
-3. Push token registration fixed (platform set before connect)
-4. APNs VoIP Push configured on server
-5. Defensive native module checks added
-6. Comprehensive call logging added
+- Android: https://expo.dev/accounts/fatihtunali/projects/whisper/builds/fc2e5aa4-aba8-41ae-a801-2addb90b09b1
+- iOS: https://expo.dev/accounts/fatihtunali/projects/whisper/builds/77f1319f-686a-4f23-b1eb-748bcef64df2
 
 ---
 
@@ -980,4 +1169,4 @@ Always increment both when making changes:
 
 ---
 
-*This document was generated on January 15, 2026*
+*Last updated: January 16, 2026 (v20)*

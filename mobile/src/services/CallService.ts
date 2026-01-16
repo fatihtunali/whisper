@@ -61,6 +61,16 @@ const loadInCallManager = async () => {
   }
 };
 
+// DeviceEventEmitter for InCallManager events
+let DeviceEventEmitter: any = null;
+const getDeviceEventEmitter = () => {
+  if (!DeviceEventEmitter) {
+    const { DeviceEventEmitter: Emitter } = require('react-native');
+    DeviceEventEmitter = Emitter;
+  }
+  return DeviceEventEmitter;
+};
+
 // Default STUN servers (fallback)
 const DEFAULT_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -101,9 +111,109 @@ class CallService {
   private isCleaningUp: boolean = false;
   private cleanupCompleteTime: number = 0;
 
+  // Audio event subscriptions
+  private mediaButtonSubscription: any = null;
+  private wiredHeadsetSubscription: any = null;
+  private audioEventsSetup: boolean = false;
+
+  // Callback for headphone button answer (to be set by UI)
+  public onHeadphoneAnswer: (() => void) | null = null;
+  public onHeadphoneHangup: (() => void) | null = null;
+
   constructor() {
     // Set up signaling message handlers
     this.setupSignalingHandlers();
+  }
+
+  // Set up audio event listeners for headphone button support
+  private setupAudioEventListeners(): void {
+    if (this.audioEventsSetup) return;
+
+    try {
+      const emitter = getDeviceEventEmitter();
+      if (!emitter) {
+        console.warn('[CallService] DeviceEventEmitter not available');
+        return;
+      }
+
+      // MediaButton event - fired when headphone button is pressed
+      // This handles both wired and Bluetooth headphone buttons
+      this.mediaButtonSubscription = emitter.addListener('MediaButton', (data: any) => {
+        console.log('[CallService] MediaButton event:', data);
+
+        // data.eventText can be: 'cycleHeadset', 'cycleHeadsetDouble', etc.
+        // Single press: answer call if ringing, hang up if connected
+        // Double press: typically reject/hang up
+
+        if (!this.currentSession) return;
+
+        const state = this.currentSession.state;
+
+        if (data.eventText === 'cycleHeadset' || data.eventText === 'cycleHeadsetSingle') {
+          if (state === 'ringing' && this.currentSession.isIncoming) {
+            // Answer incoming call with headphone button
+            console.log('[CallService] Answering call via headphone button');
+            if (this.onHeadphoneAnswer) {
+              this.onHeadphoneAnswer();
+            }
+          } else if (state === 'connected' || state === 'connecting') {
+            // End active call with headphone button
+            console.log('[CallService] Ending call via headphone button');
+            if (this.onHeadphoneHangup) {
+              this.onHeadphoneHangup();
+            } else {
+              this.endCall();
+            }
+          }
+        } else if (data.eventText === 'cycleHeadsetDouble') {
+          // Double press - reject or hang up
+          if (state === 'ringing' && this.currentSession.isIncoming) {
+            console.log('[CallService] Rejecting call via headphone double-press');
+            this.rejectCall(this.currentSession.callId, this.currentSession.contactId);
+          } else if (state === 'connected' || state === 'connecting') {
+            console.log('[CallService] Ending call via headphone double-press');
+            this.endCall();
+          }
+        }
+      });
+
+      // WiredHeadset event - fired when headset is plugged in/out
+      this.wiredHeadsetSubscription = emitter.addListener('WiredHeadset', (data: any) => {
+        console.log('[CallService] WiredHeadset event:', data);
+        // data.isPlugged: true/false
+        // data.hasMic: true/false
+        // data.deviceName: string
+
+        // When headset is plugged in during a call, audio automatically routes to it
+        // No action needed - InCallManager handles this with auto: true
+      });
+
+      this.audioEventsSetup = true;
+      console.log('[CallService] Audio event listeners set up for headphone support');
+    } catch (e) {
+      console.warn('[CallService] Failed to set up audio event listeners:', e);
+    }
+  }
+
+  // Remove audio event listeners
+  private removeAudioEventListeners(): void {
+    if (this.mediaButtonSubscription) {
+      try {
+        this.mediaButtonSubscription.remove();
+      } catch (e) {
+        console.warn('[CallService] Failed to remove mediaButton listener:', e);
+      }
+      this.mediaButtonSubscription = null;
+    }
+    if (this.wiredHeadsetSubscription) {
+      try {
+        this.wiredHeadsetSubscription.remove();
+      } catch (e) {
+        console.warn('[CallService] Failed to remove wiredHeadset listener:', e);
+      }
+      this.wiredHeadsetSubscription = null;
+    }
+    this.audioEventsSetup = false;
   }
 
   // Request TURN credentials from server
@@ -320,6 +430,9 @@ class CallService {
       }
     }
 
+    // Set up headphone button listeners
+    this.setupAudioEventListeners();
+
     this.notifyStateChange('calling');
 
     try {
@@ -409,6 +522,9 @@ class CallService {
         console.warn('[CallService] Failed to start InCallManager:', e);
       }
     }
+
+    // Set up headphone button listeners
+    this.setupAudioEventListeners();
 
     this.notifyStateChange('connecting');
 
@@ -877,6 +993,10 @@ class CallService {
           remoteSdp: message.sdp, // Store the SDP offer for later use
         };
 
+        // Set up headphone button listeners for incoming call
+        // (allows answering with headphone button)
+        this.setupAudioEventListeners();
+
         this.notifyStateChange('ringing');
 
         // Notify about incoming call
@@ -1137,6 +1257,9 @@ class CallService {
       // Clear pending ICE candidates
       this.pendingIceCandidates = [];
 
+      // Remove audio event listeners (headphone button support)
+      this.removeAudioEventListeners();
+
       // Clear session (may already be null if endCall was called)
       if (this.currentSession) {
         this.currentSession = null;
@@ -1251,6 +1374,9 @@ class CallService {
       // Clear all state
       this.pendingIceCandidates = [];
       this.currentSession = null;
+
+      // Remove audio event listeners
+      this.removeAudioEventListeners();
 
       // Notify handlers
       if (this.remoteStreamHandler) {
