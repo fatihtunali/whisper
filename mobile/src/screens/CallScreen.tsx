@@ -76,15 +76,18 @@ export default function CallScreen() {
     callService.setCallStateHandler(handleCallState);
 
     return () => {
-      callService.setCallStateHandler(null);
-      if (durationTimerRef.current) {
-        clearInterval(durationTimerRef.current);
-      }
-      // End call on unmount if still active (e.g., user navigated away forcefully)
+      // IMPORTANT: End call FIRST before clearing handlers
+      // Otherwise the endCall state change won't be handled
       const session = callService.getCurrentSession();
       if (session && session.state !== 'ended') {
         console.log('[CallScreen] Ending call on unmount - session still active');
         callService.endCall();
+      }
+
+      // Now safe to clear handlers and timers
+      callService.setCallStateHandler(null);
+      if (durationTimerRef.current) {
+        clearInterval(durationTimerRef.current);
       }
     };
   }, [navigation]);
