@@ -244,11 +244,16 @@ class MessagingService {
       };
 
       this.ws.onmessage = (event) => {
-        this.handleMessage(event.data);
+        console.log('[MessagingService] Raw message received, length:', event.data?.length);
+        try {
+          this.handleMessage(event.data);
+        } catch (err) {
+          console.error('[MessagingService] CRASH in handleMessage:', err);
+        }
       };
 
-      this.ws.onclose = () => {
-        console.log('[MessagingService] Disconnected');
+      this.ws.onclose = (event) => {
+        console.log('[MessagingService] Disconnected, code:', event?.code, 'reason:', event?.reason);
         this.isConnecting = false;
         this.isRegistering = false;
         this.needsReregistration = false;
@@ -1054,22 +1059,32 @@ class MessagingService {
 
   // Private: Handle authentication challenge from server
   private async handleRegisterChallenge(payload: { challenge: string }): Promise<void> {
+    console.log('[MessagingService] handleRegisterChallenge called');
+    console.log('[MessagingService] User exists:', !!this.user);
+    console.log('[MessagingService] User signingPrivateKey exists:', !!this.user?.signingPrivateKey);
+
     if (!this.user) {
       console.error('[MessagingService] Cannot respond to challenge - no user');
       return;
     }
 
     const { challenge } = payload;
-    console.log('[MessagingService] Received authentication challenge');
+    console.log('[MessagingService] Received authentication challenge, length:', challenge?.length);
 
     try {
       // Decode the challenge from base64
+      console.log('[MessagingService] Decoding challenge...');
       const challengeBytes = this.decodeBase64(challenge);
+      console.log('[MessagingService] Challenge decoded, bytes:', challengeBytes.length);
 
       // Sign the challenge with our Ed25519 signing key
+      console.log('[MessagingService] Signing challenge...');
+      console.log('[MessagingService] signingPrivateKey length:', this.user.signingPrivateKey?.length);
       const signature = cryptoService.sign(challengeBytes, this.user.signingPrivateKey);
+      console.log('[MessagingService] Challenge signed, signature length:', signature?.length);
 
       // Send the proof back to server
+      console.log('[MessagingService] Sending proof...');
       this.send({
         type: 'register_proof',
         payload: { signature },
@@ -1078,6 +1093,7 @@ class MessagingService {
       console.log('[MessagingService] Sent authentication proof');
     } catch (error) {
       console.error('[MessagingService] Failed to sign challenge:', error);
+      console.error('[MessagingService] Error details:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
     }
   }
 
@@ -1106,7 +1122,11 @@ class MessagingService {
   private handleCallSignaling(type: string, payload: any): void {
     // Dynamically import to avoid circular dependencies
     import('./CallService').then(({ callService }) => {
-      callService.handleWebSocketMessage(type, payload);
+      callService.handleWebSocketMessage(type, payload).catch((err) => {
+        console.error('[MessagingService] CallService.handleWebSocketMessage error:', err);
+      });
+    }).catch((err) => {
+      console.error('[MessagingService] Failed to import CallService:', err);
     });
   }
 

@@ -891,32 +891,34 @@ class CallService {
 
   // Handle incoming WebSocket call message from MessagingService
   async handleWebSocketMessage(type: string, payload: any): Promise<void> {
-    switch (type) {
-      case 'incoming_call':
-        // Map to internal format and handle
-        this.handleSignalingMessage(payload.fromWhisperId, {
-          type: 'call_offer',
-          callId: payload.callId,
-          sdp: payload.offer,
-          isVideo: payload.isVideo || false,
-        });
-        break;
+    try {
+      console.log('[CallService] handleWebSocketMessage:', type);
+      switch (type) {
+        case 'incoming_call':
+          // Map to internal format and handle
+          await this.handleSignalingMessage(payload.fromWhisperId, {
+            type: 'call_offer',
+            callId: payload.callId,
+            sdp: payload.offer,
+            isVideo: payload.isVideo || false,
+          });
+          break;
       case 'call_answered':
-        this.handleSignalingMessage(payload.fromWhisperId, {
+        await this.handleSignalingMessage(payload.fromWhisperId, {
           type: 'call_answer',
           callId: payload.callId,
           sdp: payload.answer,
         });
         break;
       case 'call_ice_candidate':
-        this.handleSignalingMessage(payload.fromWhisperId, {
+        await this.handleSignalingMessage(payload.fromWhisperId, {
           type: 'ice_candidate',
           callId: payload.callId,
           candidate: JSON.parse(payload.candidate),
         });
         break;
       case 'call_ended':
-        this.handleSignalingMessage(payload.fromWhisperId, {
+        await this.handleSignalingMessage(payload.fromWhisperId, {
           type: 'call_end',
           callId: payload.callId,
         });
@@ -940,6 +942,9 @@ class CallService {
           await this.cleanup(sessionToClean);
         }
         break;
+      }
+    } catch (error) {
+      console.error('[CallService] handleWebSocketMessage error:', error);
     }
   }
 
@@ -1001,11 +1006,15 @@ class CallService {
 
         // Notify about incoming call
         if (this.incomingCallHandler) {
-          this.incomingCallHandler(
-            message.callId,
-            fromWhisperId,
-            message.isVideo || false
-          );
+          try {
+            this.incomingCallHandler(
+              message.callId,
+              fromWhisperId,
+              message.isVideo || false
+            );
+          } catch (err) {
+            console.error('[CallService] incomingCallHandler error:', err);
+          }
         }
         break;
 

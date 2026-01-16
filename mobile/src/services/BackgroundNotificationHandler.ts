@@ -17,7 +17,9 @@ import { Platform } from 'react-native';
 export const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND-NOTIFICATION-TASK';
 
 // Define the background task - must be done in module scope
-TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error, executionInfo }) => {
+// Wrap in try-catch to prevent crashes on iOS when runtime isn't ready
+try {
+  TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error, executionInfo }) => {
   if (error) {
     console.error('[BackgroundNotification] Task error:', error);
     return;
@@ -86,7 +88,10 @@ TaskManager.defineTask(BACKGROUND_NOTIFICATION_TASK, async ({ data, error, execu
     // Messages are displayed automatically by the notification system
     // No additional handling needed
   }
-});
+  });
+} catch (e) {
+  console.warn('[BackgroundNotification] Failed to define task (may be normal in Expo Go):', e);
+}
 
 // Register the background task
 export async function registerBackgroundNotificationTask(): Promise<void> {
