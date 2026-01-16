@@ -40,7 +40,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
-# But allow google-services.json for FCM
-!/android/google-services.json
+
 # Firebase service account key (sensitive - never commit)
 android/whisper-*.json
