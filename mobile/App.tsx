@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { View, AppState, AppStateStatus } from 'react-native';
+import { View, AppState, AppStateStatus, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -10,6 +10,30 @@ import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { secureStorage } from './src/storage/SecureStorage';
 import { messagingService } from './src/services/MessagingService';
 import { navigationRef } from './src/utils/navigationRef';
+import ErrorBoundary from 'react-native-error-boundary';
+
+// Ignore specific warnings that are not actionable
+LogBox.ignoreLogs([
+  'Non-serializable values were found in the navigation state',
+]);
+
+// Global error handler for unhandled JS errors
+const globalErrorHandler = (error: Error, stackTrace: string) => {
+  console.error('[App] Global error caught:', error.message);
+  console.error('[App] Stack trace:', stackTrace);
+  // Don't crash - just log and continue
+};
+
+// Fallback component when an error boundary catches an error
+const ErrorFallback = ({ error, resetError }: { error: Error; resetError: () => void }) => (
+  <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#000' }}>
+    <View style={{ backgroundColor: '#1a1a1a', padding: 20, borderRadius: 10 }}>
+      <View style={{ marginBottom: 10 }}>
+        <View><View /></View>
+      </View>
+    </View>
+  </View>
+);
 
 // Import screens
 import WelcomeScreen from './src/screens/WelcomeScreen';
@@ -137,12 +161,14 @@ function AppContent() {
 
 export default function App() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <SafeAreaProvider>
-        <ThemeProvider>
-          <AppContent />
-        </ThemeProvider>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <ErrorBoundary onError={globalErrorHandler} FallbackComponent={ErrorFallback}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <ThemeProvider>
+            <AppContent />
+          </ThemeProvider>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }

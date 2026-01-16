@@ -8,11 +8,6 @@ let InCallManager: any = null;
 let inCallManagerAvailable: boolean | null = null;
 let inCallManagerLoadAttempted: boolean = false;
 
-// WebRTC availability tracking
-let webrtcAvailable: boolean | null = null;
-let webrtcLoadAttempted: boolean = false;
-let webrtcModule: any = null;
-
 // Check if InCallManager native module is available at runtime
 // This function is designed to NEVER throw - always returns a boolean
 const checkInCallManagerAvailable = (): boolean => {
@@ -74,63 +69,6 @@ const getDeviceEventEmitter = () => {
     DeviceEventEmitter = Emitter;
   }
   return DeviceEventEmitter;
-};
-
-// Check if WebRTC native module is available at runtime
-// This function is designed to NEVER throw - always returns a boolean
-const checkWebRTCAvailable = (): boolean => {
-  if (webrtcAvailable !== null) return webrtcAvailable;
-
-  try {
-    // Check if the native module exists before attempting to use it
-    const { NativeModules } = require('react-native');
-    if (!NativeModules || typeof NativeModules !== 'object') {
-      webrtcAvailable = false;
-      console.log('[CallService] NativeModules not available - WebRTC disabled');
-      return false;
-    }
-    // react-native-webrtc registers as WebRTCModule
-    webrtcAvailable = !!(NativeModules.WebRTCModule);
-    if (!webrtcAvailable) {
-      console.log('[CallService] WebRTCModule native module not available - calls disabled');
-    } else {
-      console.log('[CallService] WebRTCModule native module available');
-    }
-    return webrtcAvailable;
-  } catch (e) {
-    webrtcAvailable = false;
-    console.log('[CallService] WebRTC native module check failed:', e);
-    return false;
-  }
-};
-
-// Load WebRTC module with error handling
-const loadWebRTCModule = async (): Promise<any | null> => {
-  if (webrtcModule) return webrtcModule;
-  if (webrtcLoadAttempted && !webrtcModule) return null;
-
-  // Check availability before loading
-  if (!checkWebRTCAvailable()) {
-    webrtcLoadAttempted = true;
-    return null;
-  }
-
-  try {
-    webrtcLoadAttempted = true;
-    const module = await import('react-native-webrtc');
-    if (!module || !module.mediaDevices || !module.RTCPeerConnection) {
-      console.warn('[CallService] WebRTC module loaded but required exports not available');
-      webrtcModule = null;
-      return null;
-    }
-    webrtcModule = module;
-    console.log('[CallService] WebRTC module loaded successfully');
-    return webrtcModule;
-  } catch (e) {
-    console.warn('[CallService] Failed to load WebRTC module:', e);
-    webrtcModule = null;
-    return null;
-  }
 };
 
 // Default STUN servers (fallback)
@@ -369,39 +307,11 @@ class CallService {
     return this.remoteStream;
   }
 
-  // Check if calling is available (WebRTC module loaded)
-  async isCallAvailable(): Promise<boolean> {
-    try {
-      const webrtc = await loadWebRTCModule();
-      return webrtc !== null;
-    } catch (e) {
-      console.warn('[CallService] isCallAvailable check failed:', e);
-      return false;
-    }
-  }
-
-  // Synchronous check for WebRTC availability (use after initial check)
-  isCallAvailableSync(): boolean {
-    return checkWebRTCAvailable();
-  }
-
   // Initialize media stream (audio + optional video)
   async initializeMedia(isVideo: boolean): Promise<MediaStream> {
-    console.log('[CallService] initializeMedia starting, isVideo:', isVideo);
-
     try {
-      // First check if WebRTC is available
-      const webrtc = await loadWebRTCModule();
-      if (!webrtc) {
-        console.error('[CallService] WebRTC module not available');
-        throw new Error('WebRTC is not available on this device. Voice and video calls cannot be made.');
-      }
-
-      const { mediaDevices } = webrtc;
-      if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
-        console.error('[CallService] mediaDevices.getUserMedia not available');
-        throw new Error('Media devices are not available on this device.');
-      }
+      // Dynamically import react-native-webrtc
+      const { mediaDevices } = await import('react-native-webrtc');
 
       // Request media with constraints
       const constraints = {
@@ -413,30 +323,14 @@ class CallService {
         } : false,
       };
 
-      console.log('[CallService] Requesting getUserMedia with constraints:', JSON.stringify(constraints));
-
-      // Use react-native-webrtc's mediaDevices with timeout
-      const mediaPromise = mediaDevices.getUserMedia(constraints);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('getUserMedia timeout after 10 seconds')), 10000)
-      );
-
-      const stream = await Promise.race([mediaPromise, timeoutPromise]);
-
-      if (!stream) {
-        throw new Error('getUserMedia returned null stream');
-      }
-
+      // Use react-native-webrtc's mediaDevices
+      const stream = await mediaDevices.getUserMedia(constraints);
       this.localStream = stream as unknown as MediaStream;
-      console.log('[CallService] Local media stream initialized successfully');
+      console.log('[CallService] Local media stream initialized');
       return this.localStream;
-    } catch (error: any) {
-      console.error('[CallService] Failed to get user media:', error?.message || error);
-      // Re-throw with a user-friendly message
-      if (error?.message?.includes('not available')) {
-        throw error;
-      }
-      throw new Error(`Could not access microphone${isVideo ? ' or camera' : ''}. Please check permissions and try again.`);
+    } catch (error) {
+      console.error('[CallService] Failed to get user media:', error);
+      throw error;
     }
   }
 
@@ -479,20 +373,6 @@ class CallService {
 
   // Start an outgoing call
   async startCall(contact: Contact, isVideo: boolean): Promise<string> {
-    console.log('[CallService] startCall initiated for', contact.whisperId, 'isVideo:', isVideo);
-
-    // FIRST: Check if WebRTC is available before doing anything else
-    try {
-      const webrtc = await loadWebRTCModule();
-      if (!webrtc) {
-        console.error('[CallService] WebRTC not available, cannot start call');
-        throw new Error('Voice and video calls are not available on this device. Please try reinstalling the app.');
-      }
-    } catch (e: any) {
-      console.error('[CallService] WebRTC availability check failed:', e);
-      throw new Error(e?.message || 'Calls are not available on this device.');
-    }
-
     // Check if cleanup is in progress - but reset if stuck too long
     if (this.isCleaningUp) {
       console.log('[CallService] Cleanup was in progress, forcing reset...');
@@ -612,20 +492,6 @@ class CallService {
 
   // Accept an incoming call
   async acceptCall(callId: string, contactId: string, isVideo: boolean, remoteSdp: string): Promise<void> {
-    console.log('[CallService] acceptCall for callId:', callId, 'isVideo:', isVideo);
-
-    // FIRST: Check if WebRTC is available before doing anything else
-    try {
-      const webrtc = await loadWebRTCModule();
-      if (!webrtc) {
-        console.error('[CallService] WebRTC not available, cannot accept call');
-        throw new Error('Voice and video calls are not available on this device.');
-      }
-    } catch (e: any) {
-      console.error('[CallService] WebRTC availability check failed:', e);
-      throw new Error(e?.message || 'Cannot accept call - calls not available.');
-    }
-
     if (this.currentSession && this.currentSession.callId !== callId) {
       throw new Error('Another call already in progress');
     }
@@ -853,12 +719,7 @@ class CallService {
       }
 
       // Fallback: get a new stream with different facing mode
-      const webrtc = await loadWebRTCModule();
-      if (!webrtc) {
-        console.warn('[CallService] WebRTC not available for camera switch');
-        return this.currentSession.isFrontCamera;
-      }
-      const { mediaDevices } = webrtc;
+      const { mediaDevices } = await import('react-native-webrtc');
       const newFacingMode = this.currentSession.isFrontCamera ? 'environment' : 'user';
 
       const newStream = await mediaDevices.getUserMedia({
@@ -959,146 +820,204 @@ class CallService {
 
   // Private: Create peer connection
   private async createPeerConnection(): Promise<void> {
-    console.log('[CallService] createPeerConnection starting...');
-
+    // Outer try-catch to handle any native WebRTC exceptions that could crash Hermes
     try {
-      // Use the safe WebRTC loader
-      const webrtc = await loadWebRTCModule();
-      if (!webrtc) {
-        console.error('[CallService] WebRTC module not available for peer connection');
-        throw new Error('WebRTC is not available on this device.');
+      // Dynamically import react-native-webrtc
+      console.log('[CallService] Importing WebRTC module...');
+      let RTCPeerConnection: any;
+      let RNMediaStream: any;
+
+      try {
+        const webrtcModule = await import('react-native-webrtc');
+        RTCPeerConnection = webrtcModule.RTCPeerConnection;
+        RNMediaStream = webrtcModule.MediaStream;
+      } catch (importError) {
+        console.error('[CallService] Failed to import WebRTC module:', importError);
+        throw new Error('WebRTC module not available');
       }
 
-      const { RTCPeerConnection, MediaStream: RNMediaStream } = webrtc;
       if (!RTCPeerConnection) {
-        console.error('[CallService] RTCPeerConnection not available');
-        throw new Error('WebRTC peer connection is not available.');
+        console.error('[CallService] RTCPeerConnection not found in module');
+        throw new Error('RTCPeerConnection not available');
       }
-
-      console.log('[CallService] WebRTC module loaded successfully');
+      console.log('[CallService] WebRTC module imported successfully');
 
       // Small delay to let any previous operations settle
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Get ICE servers with TURN credentials (with timeout)
-      let iceServers;
+      // Get ICE servers with TURN credentials
+      let iceServers: RTCIceServer[];
       try {
-        const icePromise = this.getIceServers();
-        const iceTimeoutPromise = new Promise<RTCIceServer[]>((resolve) =>
-          setTimeout(() => {
-            console.warn('[CallService] ICE servers request timed out, using defaults');
-            resolve(DEFAULT_ICE_SERVERS);
-          }, 5000)
-        );
-        iceServers = await Promise.race([icePromise, iceTimeoutPromise]);
-      } catch (e) {
-        console.warn('[CallService] Failed to get ICE servers, using defaults:', e);
+        iceServers = await this.getIceServers();
+      } catch (iceError) {
+        console.warn('[CallService] Failed to get ICE servers, using defaults:', iceError);
         iceServers = DEFAULT_ICE_SERVERS;
       }
       console.log('[CallService] Using ICE servers:', iceServers.map(s => s.urls));
 
       console.log('[CallService] Creating RTCPeerConnection...');
-      this.peerConnection = new RTCPeerConnection({
-        iceServers,
-      }) as unknown as RTCPeerConnection;
 
-      if (!this.peerConnection) {
-        throw new Error('Failed to create RTCPeerConnection - returned null');
+      // Wrap the native RTCPeerConnection creation in try-catch
+      // This is where native crashes often occur
+      try {
+        this.peerConnection = new RTCPeerConnection({
+          iceServers,
+        }) as unknown as RTCPeerConnection;
+      } catch (peerConnectionError) {
+        console.error('[CallService] Native RTCPeerConnection creation failed:', peerConnectionError);
+        this.peerConnection = null;
+        throw new Error('Failed to create peer connection - native error');
       }
 
+      if (!this.peerConnection) {
+        throw new Error('RTCPeerConnection is null after creation');
+      }
       console.log('[CallService] RTCPeerConnection created successfully');
 
-    // Handle ICE candidates
+    // Handle ICE candidates - wrapped in try-catch to prevent native crashes
     (this.peerConnection as any).onicecandidate = (event: any) => {
-      // Capture session data locally to prevent race condition with cleanup
-      const session = this.currentSession;
-      if (event.candidate && session && !this.isCleaningUp) {
-        this.sendSignalingMessage(session.contactId, {
-          type: 'ice_candidate',
-          callId: session.callId,
-          candidate: event.candidate.toJSON ? event.candidate.toJSON() : event.candidate,
-        });
+      try {
+        // Capture session data locally to prevent race condition with cleanup
+        const session = this.currentSession;
+        if (event && event.candidate && session && !this.isCleaningUp) {
+          let candidateData: any;
+          try {
+            candidateData = event.candidate.toJSON ? event.candidate.toJSON() : event.candidate;
+          } catch (e) {
+            console.warn('[CallService] Failed to serialize ICE candidate:', e);
+            candidateData = event.candidate;
+          }
+          this.sendSignalingMessage(session.contactId, {
+            type: 'ice_candidate',
+            callId: session.callId,
+            candidate: candidateData,
+          });
+        }
+      } catch (e) {
+        console.error('[CallService] onicecandidate handler error:', e);
       }
     };
 
-    // Handle connection state changes
+    // Handle connection state changes - wrapped in try-catch to prevent native crashes
     (this.peerConnection as any).onconnectionstatechange = async () => {
-      // Early exit if cleanup is in progress to prevent race conditions
-      if (this.isCleaningUp) {
-        console.log('[CallService] Ignoring connection state change - cleanup in progress');
-        return;
-      }
-
-      const state = (this.peerConnection as any)?.connectionState;
-      console.log('[CallService] Connection state:', state);
-
-      // Capture session locally to prevent race condition
-      const session = this.currentSession;
-
-      if (state === 'connected') {
-        // Stop ringback as backup (in case call_answer handler didn't run first)
-        // Only for outgoing calls that had ringback
-        if (session && !session.isIncoming) {
-          await this.stopRingbackAndConfigureActiveCall();
+      try {
+        // Early exit if cleanup is in progress to prevent race conditions
+        if (this.isCleaningUp) {
+          console.log('[CallService] Ignoring connection state change - cleanup in progress');
+          return;
         }
 
-        // Re-check session after async operation
-        if (this.currentSession && !this.isCleaningUp) {
-          this.currentSession.state = 'connected';
-          this.currentSession.startTime = Date.now();
-          this.notifyStateChange('connected');
+        // Safe access to connection state
+        let state: string | undefined;
+        try {
+          state = (this.peerConnection as any)?.connectionState;
+        } catch (e) {
+          console.warn('[CallService] Failed to get connectionState:', e);
+          return;
         }
-      } else if (state === 'disconnected' || state === 'failed') {
-        // Only end call if not already cleaning up
-        if (!this.isCleaningUp) {
-          console.log('[CallService] WebRTC connection failed/disconnected, ending call');
-          this.endCall();
+        console.log('[CallService] Connection state:', state);
+
+        // Capture session locally to prevent race condition
+        const session = this.currentSession;
+
+        if (state === 'connected') {
+          // Stop ringback as backup (in case call_answer handler didn't run first)
+          // Only for outgoing calls that had ringback
+          if (session && !session.isIncoming) {
+            try {
+              await this.stopRingbackAndConfigureActiveCall();
+            } catch (e) {
+              console.warn('[CallService] Failed to stop ringback:', e);
+            }
+          }
+
+          // Re-check session after async operation
+          if (this.currentSession && !this.isCleaningUp) {
+            this.currentSession.state = 'connected';
+            this.currentSession.startTime = Date.now();
+            this.notifyStateChange('connected');
+          }
+        } else if (state === 'disconnected' || state === 'failed') {
+          // Only end call if not already cleaning up
+          if (!this.isCleaningUp) {
+            console.log('[CallService] WebRTC connection failed/disconnected, ending call');
+            this.endCall();
+          }
         }
+      } catch (e) {
+        console.error('[CallService] onconnectionstatechange handler error:', e);
       }
     };
 
     // Handle ICE connection state changes (more granular than connection state)
     (this.peerConnection as any).oniceconnectionstatechange = () => {
-      const iceState = (this.peerConnection as any)?.iceConnectionState;
-      console.log('[CallService] ICE connection state:', iceState);
+      try {
+        const iceState = (this.peerConnection as any)?.iceConnectionState;
+        console.log('[CallService] ICE connection state:', iceState);
+      } catch (e) {
+        console.error('[CallService] oniceconnectionstatechange handler error:', e);
+      }
     };
 
     // Handle ICE gathering state changes
     (this.peerConnection as any).onicegatheringstatechange = () => {
-      const gatheringState = (this.peerConnection as any)?.iceGatheringState;
-      console.log('[CallService] ICE gathering state:', gatheringState);
+      try {
+        const gatheringState = (this.peerConnection as any)?.iceGatheringState;
+        console.log('[CallService] ICE gathering state:', gatheringState);
+      } catch (e) {
+        console.error('[CallService] onicegatheringstatechange handler error:', e);
+      }
     };
 
     // Handle signaling state changes
     (this.peerConnection as any).onsignalingstatechange = () => {
-      const signalingState = (this.peerConnection as any)?.signalingState;
-      console.log('[CallService] Signaling state:', signalingState);
+      try {
+        const signalingState = (this.peerConnection as any)?.signalingState;
+        console.log('[CallService] Signaling state:', signalingState);
+      } catch (e) {
+        console.error('[CallService] onsignalingstatechange handler error:', e);
+      }
     };
 
-    // Handle remote tracks
+    // Handle remote tracks - wrapped in try-catch to prevent native crashes
     (this.peerConnection as any).ontrack = (event: any) => {
-      console.log('[CallService] Remote track received:', event.track?.kind);
-      console.log('[CallService] Event streams:', event.streams?.length || 0);
+      try {
+        console.log('[CallService] Remote track received:', event?.track?.kind);
+        console.log('[CallService] Event streams:', event?.streams?.length || 0);
 
-      // Use the stream from the event directly (preferred method)
-      if (event.streams && event.streams[0]) {
-        this.remoteStream = event.streams[0] as unknown as MediaStream;
-        console.log('[CallService] Using event stream directly');
-      } else {
-        // Fallback: create stream and add track
-        if (!this.remoteStream) {
-          this.remoteStream = new RNMediaStream() as unknown as MediaStream;
-          console.log('[CallService] Created new remote stream');
+        // Use the stream from the event directly (preferred method)
+        if (event && event.streams && event.streams[0]) {
+          this.remoteStream = event.streams[0] as unknown as MediaStream;
+          console.log('[CallService] Using event stream directly');
+        } else if (event && event.track) {
+          // Fallback: create stream and add track
+          if (!this.remoteStream) {
+            try {
+              this.remoteStream = new RNMediaStream() as unknown as MediaStream;
+              console.log('[CallService] Created new remote stream');
+            } catch (streamError) {
+              console.error('[CallService] Failed to create remote MediaStream:', streamError);
+              return;
+            }
+          }
+          try {
+            (this.remoteStream as any).addTrack(event.track);
+            console.log('[CallService] Added track to remote stream');
+          } catch (trackError) {
+            console.warn('[CallService] Failed to add track to remote stream:', trackError);
+          }
         }
-        if (event.track) {
-          (this.remoteStream as any).addTrack(event.track);
-          console.log('[CallService] Added track to remote stream');
-        }
-      }
 
-      if (this.remoteStreamHandler && this.remoteStream) {
-        console.log('[CallService] Notifying remote stream handler');
-        this.remoteStreamHandler(this.remoteStream);
+        if (this.remoteStreamHandler && this.remoteStream) {
+          console.log('[CallService] Notifying remote stream handler');
+          try {
+            this.remoteStreamHandler(this.remoteStream);
+          } catch (handlerError) {
+            console.error('[CallService] remoteStreamHandler error:', handlerError);
+          }
+        }
+      } catch (e) {
+        console.error('[CallService] ontrack handler error:', e);
       }
     };
 
