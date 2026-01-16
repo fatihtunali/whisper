@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "140378510642",
+    "project_id": "whisper-60656",
+    "storage_bucket": "whisper-60656.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:140378510642:android:0d9a5853728d796e23332b",
+        "android_client_info": {
+          "package_name": "com.sarjmobile.whisper"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB-HMgZMHoFGtABpyIlkQj_zk_uRE5zXX8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
