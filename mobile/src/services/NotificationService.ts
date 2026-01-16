@@ -5,6 +5,7 @@ import { callKeepService } from './CallKeepService';
 import { voipPushService } from './VoIPPushService';
 import { messagingService } from './MessagingService';
 import { registerBackgroundNotificationTask } from './BackgroundNotificationHandler';
+import { androidCallNotificationService } from './AndroidCallNotificationService';
 
 // NOTE: setNotificationHandler is now called inside initialize() to prevent iOS crashes
 // Calling it at module load time can crash the app before native modules are ready
@@ -110,6 +111,15 @@ class NotificationService {
         await callKeepService.initialize();
       } catch (e) {
         console.warn('[NotificationService] CallKeep initialization failed (native module may not be available):', e);
+      }
+
+      // Initialize Android full-screen call notifications (using notifee)
+      if (Platform.OS === 'android') {
+        try {
+          await androidCallNotificationService.initialize();
+        } catch (e) {
+          console.warn('[NotificationService] Android call notification service initialization failed:', e);
+        }
       }
 
       // NOTE: Platform is now set by AuthContext BEFORE calling initialize()
@@ -250,7 +260,21 @@ class NotificationService {
     fromWhisperId: string,
     isVideo: boolean
   ): Promise<string> {
-    // Use CallKeep for native call UI (works even when app is backgrounded)
+    // On Android, prefer notifee for full-screen call notification
+    if (Platform.OS === 'android' && androidCallNotificationService.isAvailable()) {
+      const success = await androidCallNotificationService.displayIncomingCall(
+        callId,
+        callerName,
+        fromWhisperId,
+        isVideo
+      );
+      if (success) {
+        console.log('[NotificationService] Displayed Android full-screen call notification via notifee');
+        return callId;
+      }
+    }
+
+    // Use CallKeep for native call UI (iOS primary, Android fallback)
     if (callKeepService.isAvailable()) {
       await callKeepService.displayIncomingCall(
         callId,
@@ -262,7 +286,7 @@ class NotificationService {
       return callId;
     }
 
-    // Fallback to regular notification if CallKeep isn't available
+    // Ultimate fallback to regular notification
     const notificationId = await Notifications.scheduleNotificationAsync({
       content: {
         title: isVideo ? 'Incoming Video Call' : 'Incoming Call',

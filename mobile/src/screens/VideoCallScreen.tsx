@@ -258,21 +258,53 @@ export default function VideoCallScreen() {
   const handleAcceptCall = useCallback(async () => {
     try {
       // Get the current session to get the stored SDP offer
-      const session = callService.getCurrentSession();
+      let session = callService.getCurrentSession();
+
+      // If SDP not available yet, wait for it (race condition with VoIP push)
+      // The VoIP push arrives before the WebSocket message with SDP
+      if (callId && session && session.callId === callId && !session.remoteSdp) {
+        console.log('[VideoCallScreen] Waiting for SDP to arrive via WebSocket...');
+        setCallState('connecting'); // Show "Connecting..." while waiting
+
+        // Poll for SDP with timeout (max 5 seconds)
+        const maxWaitTime = 5000;
+        const pollInterval = 200;
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < maxWaitTime) {
+          await new Promise(resolve => setTimeout(resolve, pollInterval));
+          session = callService.getCurrentSession();
+
+          // Check if we got the SDP
+          if (session && session.callId === callId && session.remoteSdp) {
+            console.log('[VideoCallScreen] SDP arrived after', Date.now() - startTime, 'ms');
+            break;
+          }
+
+          // Check if call was cancelled
+          if (!session || session.state === 'ended') {
+            console.log('[VideoCallScreen] Call cancelled while waiting for SDP');
+            return;
+          }
+        }
+      }
+
+      // Now try to accept with the (hopefully) available SDP
+      session = callService.getCurrentSession();
       if (callId && session && session.callId === callId && session.remoteSdp) {
         console.log('[VideoCallScreen] Accepting call:', callId);
         await callService.acceptCall(callId, contactId, true, session.remoteSdp);
       } else {
-        console.error('[VideoCallScreen] No remote SDP found for call');
-        Alert.alert('Error', 'Call data not available');
+        console.error('[VideoCallScreen] No remote SDP found for call after waiting');
+        Alert.alert('Error', 'Call data not available. Please try again.');
         if (!hasNavigatedAway.current) {
           hasNavigatedAway.current = true;
           navigation.goBack();
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('[VideoCallScreen] Failed to accept call:', error);
-      Alert.alert('Error', 'Failed to accept call');
+      Alert.alert('Error', error?.message || 'Failed to accept call');
       if (!hasNavigatedAway.current) {
         hasNavigatedAway.current = true;
         navigation.goBack();

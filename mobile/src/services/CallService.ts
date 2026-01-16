@@ -8,6 +8,11 @@ let InCallManager: any = null;
 let inCallManagerAvailable: boolean | null = null;
 let inCallManagerLoadAttempted: boolean = false;
 
+// WebRTC availability tracking
+let webrtcAvailable: boolean | null = null;
+let webrtcLoadAttempted: boolean = false;
+let webrtcModule: any = null;
+
 // Check if InCallManager native module is available at runtime
 // This function is designed to NEVER throw - always returns a boolean
 const checkInCallManagerAvailable = (): boolean => {
@@ -69,6 +74,63 @@ const getDeviceEventEmitter = () => {
     DeviceEventEmitter = Emitter;
   }
   return DeviceEventEmitter;
+};
+
+// Check if WebRTC native module is available at runtime
+// This function is designed to NEVER throw - always returns a boolean
+const checkWebRTCAvailable = (): boolean => {
+  if (webrtcAvailable !== null) return webrtcAvailable;
+
+  try {
+    // Check if the native module exists before attempting to use it
+    const { NativeModules } = require('react-native');
+    if (!NativeModules || typeof NativeModules !== 'object') {
+      webrtcAvailable = false;
+      console.log('[CallService] NativeModules not available - WebRTC disabled');
+      return false;
+    }
+    // react-native-webrtc registers as WebRTCModule
+    webrtcAvailable = !!(NativeModules.WebRTCModule);
+    if (!webrtcAvailable) {
+      console.log('[CallService] WebRTCModule native module not available - calls disabled');
+    } else {
+      console.log('[CallService] WebRTCModule native module available');
+    }
+    return webrtcAvailable;
+  } catch (e) {
+    webrtcAvailable = false;
+    console.log('[CallService] WebRTC native module check failed:', e);
+    return false;
+  }
+};
+
+// Load WebRTC module with error handling
+const loadWebRTCModule = async (): Promise<any | null> => {
+  if (webrtcModule) return webrtcModule;
+  if (webrtcLoadAttempted && !webrtcModule) return null;
+
+  // Check availability before loading
+  if (!checkWebRTCAvailable()) {
+    webrtcLoadAttempted = true;
+    return null;
+  }
+
+  try {
+    webrtcLoadAttempted = true;
+    const module = await import('react-native-webrtc');
+    if (!module || !module.mediaDevices || !module.RTCPeerConnection) {
+      console.warn('[CallService] WebRTC module loaded but required exports not available');
+      webrtcModule = null;
+      return null;
+    }
+    webrtcModule = module;
+    console.log('[CallService] WebRTC module loaded successfully');
+    return webrtcModule;
+  } catch (e) {
+    console.warn('[CallService] Failed to load WebRTC module:', e);
+    webrtcModule = null;
+    return null;
+  }
 };
 
 // Default STUN servers (fallback)
@@ -307,11 +369,39 @@ class CallService {
     return this.remoteStream;
   }
 
+  // Check if calling is available (WebRTC module loaded)
+  async isCallAvailable(): Promise<boolean> {
+    try {
+      const webrtc = await loadWebRTCModule();
+      return webrtc !== null;
+    } catch (e) {
+      console.warn('[CallService] isCallAvailable check failed:', e);
+      return false;
+    }
+  }
+
+  // Synchronous check for WebRTC availability (use after initial check)
+  isCallAvailableSync(): boolean {
+    return checkWebRTCAvailable();
+  }
+
   // Initialize media stream (audio + optional video)
   async initializeMedia(isVideo: boolean): Promise<MediaStream> {
+    console.log('[CallService] initializeMedia starting, isVideo:', isVideo);
+
     try {
-      // Dynamically import react-native-webrtc
-      const { mediaDevices } = await import('react-native-webrtc');
+      // First check if WebRTC is available
+      const webrtc = await loadWebRTCModule();
+      if (!webrtc) {
+        console.error('[CallService] WebRTC module not available');
+        throw new Error('WebRTC is not available on this device. Voice and video calls cannot be made.');
+      }
+
+      const { mediaDevices } = webrtc;
+      if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+        console.error('[CallService] mediaDevices.getUserMedia not available');
+        throw new Error('Media devices are not available on this device.');
+      }
 
       // Request media with constraints
       const constraints = {
@@ -323,14 +413,30 @@ class CallService {
         } : false,
       };
 
-      // Use react-native-webrtc's mediaDevices
-      const stream = await mediaDevices.getUserMedia(constraints);
+      console.log('[CallService] Requesting getUserMedia with constraints:', JSON.stringify(constraints));
+
+      // Use react-native-webrtc's mediaDevices with timeout
+      const mediaPromise = mediaDevices.getUserMedia(constraints);
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('getUserMedia timeout after 10 seconds')), 10000)
+      );
+
+      const stream = await Promise.race([mediaPromise, timeoutPromise]);
+
+      if (!stream) {
+        throw new Error('getUserMedia returned null stream');
+      }
+
       this.localStream = stream as unknown as MediaStream;
-      console.log('[CallService] Local media stream initialized');
+      console.log('[CallService] Local media stream initialized successfully');
       return this.localStream;
-    } catch (error) {
-      console.error('[CallService] Failed to get user media:', error);
-      throw error;
+    } catch (error: any) {
+      console.error('[CallService] Failed to get user media:', error?.message || error);
+      // Re-throw with a user-friendly message
+      if (error?.message?.includes('not available')) {
+        throw error;
+      }
+      throw new Error(`Could not access microphone${isVideo ? ' or camera' : ''}. Please check permissions and try again.`);
     }
   }
 
@@ -373,6 +479,20 @@ class CallService {
 
   // Start an outgoing call
   async startCall(contact: Contact, isVideo: boolean): Promise<string> {
+    console.log('[CallService] startCall initiated for', contact.whisperId, 'isVideo:', isVideo);
+
+    // FIRST: Check if WebRTC is available before doing anything else
+    try {
+      const webrtc = await loadWebRTCModule();
+      if (!webrtc) {
+        console.error('[CallService] WebRTC not available, cannot start call');
+        throw new Error('Voice and video calls are not available on this device. Please try reinstalling the app.');
+      }
+    } catch (e: any) {
+      console.error('[CallService] WebRTC availability check failed:', e);
+      throw new Error(e?.message || 'Calls are not available on this device.');
+    }
+
     // Check if cleanup is in progress - but reset if stuck too long
     if (this.isCleaningUp) {
       console.log('[CallService] Cleanup was in progress, forcing reset...');
@@ -492,6 +612,20 @@ class CallService {
 
   // Accept an incoming call
   async acceptCall(callId: string, contactId: string, isVideo: boolean, remoteSdp: string): Promise<void> {
+    console.log('[CallService] acceptCall for callId:', callId, 'isVideo:', isVideo);
+
+    // FIRST: Check if WebRTC is available before doing anything else
+    try {
+      const webrtc = await loadWebRTCModule();
+      if (!webrtc) {
+        console.error('[CallService] WebRTC not available, cannot accept call');
+        throw new Error('Voice and video calls are not available on this device.');
+      }
+    } catch (e: any) {
+      console.error('[CallService] WebRTC availability check failed:', e);
+      throw new Error(e?.message || 'Cannot accept call - calls not available.');
+    }
+
     if (this.currentSession && this.currentSession.callId !== callId) {
       throw new Error('Another call already in progress');
     }
@@ -719,7 +853,12 @@ class CallService {
       }
 
       // Fallback: get a new stream with different facing mode
-      const { mediaDevices } = await import('react-native-webrtc');
+      const webrtc = await loadWebRTCModule();
+      if (!webrtc) {
+        console.warn('[CallService] WebRTC not available for camera switch');
+        return this.currentSession.isFrontCamera;
+      }
+      const { mediaDevices } = webrtc;
       const newFacingMode = this.currentSession.isFrontCamera ? 'environment' : 'user';
 
       const newStream = await mediaDevices.getUserMedia({
@@ -820,23 +959,53 @@ class CallService {
 
   // Private: Create peer connection
   private async createPeerConnection(): Promise<void> {
+    console.log('[CallService] createPeerConnection starting...');
+
     try {
-      // Dynamically import react-native-webrtc
-      console.log('[CallService] Importing WebRTC module...');
-      const { RTCPeerConnection, MediaStream: RNMediaStream } = await import('react-native-webrtc');
-      console.log('[CallService] WebRTC module imported successfully');
+      // Use the safe WebRTC loader
+      const webrtc = await loadWebRTCModule();
+      if (!webrtc) {
+        console.error('[CallService] WebRTC module not available for peer connection');
+        throw new Error('WebRTC is not available on this device.');
+      }
+
+      const { RTCPeerConnection, MediaStream: RNMediaStream } = webrtc;
+      if (!RTCPeerConnection) {
+        console.error('[CallService] RTCPeerConnection not available');
+        throw new Error('WebRTC peer connection is not available.');
+      }
+
+      console.log('[CallService] WebRTC module loaded successfully');
 
       // Small delay to let any previous operations settle
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      // Get ICE servers with TURN credentials
-      const iceServers = await this.getIceServers();
+      // Get ICE servers with TURN credentials (with timeout)
+      let iceServers;
+      try {
+        const icePromise = this.getIceServers();
+        const iceTimeoutPromise = new Promise<RTCIceServer[]>((resolve) =>
+          setTimeout(() => {
+            console.warn('[CallService] ICE servers request timed out, using defaults');
+            resolve(DEFAULT_ICE_SERVERS);
+          }, 5000)
+        );
+        iceServers = await Promise.race([icePromise, iceTimeoutPromise]);
+      } catch (e) {
+        console.warn('[CallService] Failed to get ICE servers, using defaults:', e);
+        iceServers = DEFAULT_ICE_SERVERS;
+      }
       console.log('[CallService] Using ICE servers:', iceServers.map(s => s.urls));
 
       console.log('[CallService] Creating RTCPeerConnection...');
       this.peerConnection = new RTCPeerConnection({
         iceServers,
       }) as unknown as RTCPeerConnection;
+
+      if (!this.peerConnection) {
+        throw new Error('Failed to create RTCPeerConnection - returned null');
+      }
+
       console.log('[CallService] RTCPeerConnection created successfully');
 
     // Handle ICE candidates
