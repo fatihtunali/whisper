@@ -187,20 +187,23 @@ extension AppDelegate: PKPushRegistryDelegate {
 
   public func pushRegistry(_ registry: PKPushRegistry, didUpdate pushCredentials: PKPushCredentials, for type: PKPushType) {
     print("[Whisper] VoIP Push credentials updated for type: \\(type.rawValue)")
-    RNVoipPushNotificationManager.didUpdatePushCredentials(pushCredentials, forType: type.rawValue)
+    RNVoipPushNotificationManager.didUpdate(pushCredentials, for: type.rawValue)
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
     print("[Whisper] VoIP Push received with payload: \\(payload.dictionaryPayload)")
 
-    // Extract call UUID from payload or generate one
-    let uuid = payload.dictionaryPayload["callId"] as? String ?? UUID().uuidString
+    let uuidString = UUID().uuidString.lowercased()
+    let callerName = payload.dictionaryPayload["fromWhisperId"] as? String ?? "Incoming Call"
+    let hasVideo = payload.dictionaryPayload["isVideo"] as? Bool ?? false
 
-    // Add completion handler before processing
-    RNVoipPushNotificationManager.addCompletionHandler(uuid, completionHandler: completion)
-
-    // Process the incoming push
-    RNVoipPushNotificationManager.didReceiveIncomingPush(withPayload: payload, forType: type.rawValue)
+    RNVoipPushNotificationManager.reportNewIncomingCall(
+      withUUID: uuidString,
+      handle: callerName,
+      hasVideo: hasVideo,
+      payload: payload.dictionaryPayload,
+      completion: completion
+    )
   }
 
   public func pushRegistry(_ registry: PKPushRegistry, didInvalidatePushTokenFor type: PKPushType) {
