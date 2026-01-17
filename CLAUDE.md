@@ -294,12 +294,26 @@ Both should be incremented together (+1) whenever:
 Current format in `mobile/app.json`:
 ```json
 "ios": {
-  "buildNumber": "9"
+  "buildNumber": "47"
 },
 "android": {
-  "versionCode": 9
+  "versionCode": 47
 }
 ```
+
+## Local Development Prerequisites
+
+### Server Requirements
+- **Redis**: The server requires Redis for presence management, message queuing, and token storage
+  - Mac: `brew install redis && brew services start redis`
+  - Linux: `sudo apt install redis-server && sudo systemctl start redis`
+  - Windows: Use WSL2 or Docker (`docker run -p 6379:6379 redis`)
+- **Environment Variables**: Copy `server/.env.example` to `server/.env` (if exists) or create with required variables
+
+### Mobile Requirements
+- **iOS Simulator**: Requires macOS with Xcode for iOS development
+- **Android Emulator**: Android Studio with SDK configured
+- **Expo Go**: For rapid development without building native code
 
 ## Security Model
 

@@ -117,62 +117,86 @@ export default function CallScreen() {
 
   // Handle accepting incoming call
   const handleAccept = async () => {
-    if (!incomingCallId || !contact) return;
+    if (!incomingCallId) {
+      console.error('[CallScreen] Cannot accept - no incoming call ID');
+      return;
+    }
+
+    // Note: contact may be null for unknown callers - we can still proceed
+    // because we have contactId from route params
 
     try {
-      // Get the current session to get the stored SDP offer
+      setCallState('connecting'); // Show "Connecting..." while waiting
+      console.log('[CallScreen] Waiting for call session and SDP...');
+
+      // Wait for BOTH session to exist AND SDP to be available
+      // This handles the race condition where VoIP push arrives before WebSocket message
+      // The WebSocket message with SDP only arrives after user connects to server
+      const maxWaitTime = 10000; // Increased to 10 seconds for cold-start scenarios
+      const pollInterval = 200;
+      const startTime = Date.now();
       let session = callService.getCurrentSession();
 
-      // If SDP not available yet, wait for it (race condition with VoIP push)
-      // The VoIP push arrives before the WebSocket message with SDP
-      if (session && session.callId === incomingCallId && !session.remoteSdp) {
-        console.log('[CallScreen] Waiting for SDP to arrive via WebSocket...');
-        setCallState('connecting'); // Show "Connecting..." while waiting
+      while (Date.now() - startTime < maxWaitTime) {
+        session = callService.getCurrentSession();
 
-        // Poll for SDP with timeout (max 5 seconds)
-        const maxWaitTime = 5000;
-        const pollInterval = 200;
-        const startTime = Date.now();
-
-        while (Date.now() - startTime < maxWaitTime) {
-          await new Promise(resolve => setTimeout(resolve, pollInterval));
-          session = callService.getCurrentSession();
-
-          // Check if we got the SDP
-          if (session && session.callId === incomingCallId && session.remoteSdp) {
-            console.log('[CallScreen] SDP arrived after', Date.now() - startTime, 'ms');
-            break;
-          }
-
-          // Check if call was cancelled
-          if (!session || session.state === 'ended') {
-            console.log('[CallScreen] Call cancelled while waiting for SDP');
-            return;
-          }
+        // Check if we have the session with SDP
+        if (session && session.callId === incomingCallId && session.remoteSdp) {
+          console.log('[CallScreen] Session with SDP found after', Date.now() - startTime, 'ms');
+          break;
         }
+
+        // Check if call was cancelled/ended
+        if (session && session.callId === incomingCallId && session.state === 'ended') {
+          console.log('[CallScreen] Call was cancelled while waiting');
+          navigation.goBack();
+          return;
+        }
+
+        // Log progress for debugging
+        if ((Date.now() - startTime) % 1000 < pollInterval) {
+          const hasSession = session ? 'yes' : 'no';
+          const matchesCallId = session?.callId === incomingCallId ? 'yes' : 'no';
+          const hasSdp = session?.remoteSdp ? 'yes' : 'no';
+          console.log(`[CallScreen] Waiting... session=${hasSession}, matchesCallId=${matchesCallId}, hasSdp=${hasSdp}`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
       }
 
-      // Now try to accept with the (hopefully) available SDP
+      // Final check - do we have everything we need?
       session = callService.getCurrentSession();
       if (session && session.callId === incomingCallId && session.remoteSdp) {
         console.log('[CallScreen] Accepting call:', incomingCallId);
-        await callService.acceptCall(incomingCallId, contact.whisperId, false, session.remoteSdp);
+        // Use contactId from route params (more reliable than contact.whisperId which may be null)
+        await callService.acceptCall(incomingCallId, contactId, false, session.remoteSdp);
       } else {
-        console.error('[CallScreen] No remote SDP found for call after waiting');
-        Alert.alert('Error', 'Call data not available. Please try again.');
-        handleDecline();
+        const hasSession = session ? 'yes' : 'no';
+        const matchesCallId = session?.callId === incomingCallId ? 'yes' : 'no';
+        const hasSdp = session?.remoteSdp ? 'yes' : 'no';
+        console.error(`[CallScreen] Call data not available after ${maxWaitTime}ms - session=${hasSession}, matchesCallId=${matchesCallId}, hasSdp=${hasSdp}`);
+        Alert.alert(
+          'Call Failed',
+          'Could not connect to the caller. The call may have been cancelled or there was a connection issue.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
       }
     } catch (error: any) {
-      console.error('Failed to accept call:', error);
+      console.error('[CallScreen] Failed to accept call:', error);
       Alert.alert('Error', error?.message || 'Failed to accept call');
-      handleDecline();
+      // Clean up the call
+      if (incomingCallId && contactId) {
+        callService.rejectCall(incomingCallId, contactId);
+      }
+      navigation.goBack();
     }
   };
 
   // Handle declining incoming call
   const handleDecline = () => {
-    if (incomingCallId && contact) {
-      callService.rejectCall(incomingCallId, contact.whisperId);
+    // Use contactId from route params (contact may be null for unknown callers)
+    if (incomingCallId && contactId) {
+      callService.rejectCall(incomingCallId, contactId);
     }
     navigation.goBack();
   };

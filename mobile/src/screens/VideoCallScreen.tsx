@@ -256,55 +256,84 @@ export default function VideoCallScreen() {
   }, []);
 
   const handleAcceptCall = useCallback(async () => {
+    if (!callId) {
+      console.error('[VideoCallScreen] Cannot accept - no call ID');
+      return;
+    }
+
     try {
-      // Get the current session to get the stored SDP offer
+      setCallState('connecting'); // Show "Connecting..." while waiting
+      console.log('[VideoCallScreen] Waiting for call session and SDP...');
+
+      // Wait for BOTH session to exist AND SDP to be available
+      // This handles the race condition where VoIP push arrives before WebSocket message
+      // The WebSocket message with SDP only arrives after user connects to server
+      const maxWaitTime = 10000; // Increased to 10 seconds for cold-start scenarios
+      const pollInterval = 200;
+      const startTime = Date.now();
       let session = callService.getCurrentSession();
 
-      // If SDP not available yet, wait for it (race condition with VoIP push)
-      // The VoIP push arrives before the WebSocket message with SDP
-      if (callId && session && session.callId === callId && !session.remoteSdp) {
-        console.log('[VideoCallScreen] Waiting for SDP to arrive via WebSocket...');
-        setCallState('connecting'); // Show "Connecting..." while waiting
+      while (Date.now() - startTime < maxWaitTime) {
+        session = callService.getCurrentSession();
 
-        // Poll for SDP with timeout (max 5 seconds)
-        const maxWaitTime = 5000;
-        const pollInterval = 200;
-        const startTime = Date.now();
-
-        while (Date.now() - startTime < maxWaitTime) {
-          await new Promise(resolve => setTimeout(resolve, pollInterval));
-          session = callService.getCurrentSession();
-
-          // Check if we got the SDP
-          if (session && session.callId === callId && session.remoteSdp) {
-            console.log('[VideoCallScreen] SDP arrived after', Date.now() - startTime, 'ms');
-            break;
-          }
-
-          // Check if call was cancelled
-          if (!session || session.state === 'ended') {
-            console.log('[VideoCallScreen] Call cancelled while waiting for SDP');
-            return;
-          }
+        // Check if we have the session with SDP
+        if (session && session.callId === callId && session.remoteSdp) {
+          console.log('[VideoCallScreen] Session with SDP found after', Date.now() - startTime, 'ms');
+          break;
         }
+
+        // Check if call was cancelled/ended
+        if (session && session.callId === callId && session.state === 'ended') {
+          console.log('[VideoCallScreen] Call was cancelled while waiting');
+          if (!hasNavigatedAway.current) {
+            hasNavigatedAway.current = true;
+            navigation.goBack();
+          }
+          return;
+        }
+
+        // Log progress for debugging
+        if ((Date.now() - startTime) % 1000 < pollInterval) {
+          const hasSession = session ? 'yes' : 'no';
+          const matchesCallId = session?.callId === callId ? 'yes' : 'no';
+          const hasSdp = session?.remoteSdp ? 'yes' : 'no';
+          console.log(`[VideoCallScreen] Waiting... session=${hasSession}, matchesCallId=${matchesCallId}, hasSdp=${hasSdp}`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
       }
 
-      // Now try to accept with the (hopefully) available SDP
+      // Final check - do we have everything we need?
       session = callService.getCurrentSession();
-      if (callId && session && session.callId === callId && session.remoteSdp) {
-        console.log('[VideoCallScreen] Accepting call:', callId);
+      if (session && session.callId === callId && session.remoteSdp) {
+        console.log('[VideoCallScreen] Accepting video call:', callId);
         await callService.acceptCall(callId, contactId, true, session.remoteSdp);
       } else {
-        console.error('[VideoCallScreen] No remote SDP found for call after waiting');
-        Alert.alert('Error', 'Call data not available. Please try again.');
-        if (!hasNavigatedAway.current) {
-          hasNavigatedAway.current = true;
-          navigation.goBack();
-        }
+        const hasSession = session ? 'yes' : 'no';
+        const matchesCallId = session?.callId === callId ? 'yes' : 'no';
+        const hasSdp = session?.remoteSdp ? 'yes' : 'no';
+        console.error(`[VideoCallScreen] Call data not available after ${maxWaitTime}ms - session=${hasSession}, matchesCallId=${matchesCallId}, hasSdp=${hasSdp}`);
+        Alert.alert(
+          'Call Failed',
+          'Could not connect to the caller. The call may have been cancelled or there was a connection issue.',
+          [{
+            text: 'OK',
+            onPress: () => {
+              if (!hasNavigatedAway.current) {
+                hasNavigatedAway.current = true;
+                navigation.goBack();
+              }
+            }
+          }]
+        );
       }
     } catch (error: any) {
       console.error('[VideoCallScreen] Failed to accept call:', error);
       Alert.alert('Error', error?.message || 'Failed to accept call');
+      // Clean up the call
+      if (callId && contactId) {
+        callService.rejectCall(callId, contactId);
+      }
       if (!hasNavigatedAway.current) {
         hasNavigatedAway.current = true;
         navigation.goBack();
