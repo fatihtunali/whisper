@@ -76,19 +76,26 @@ export default function CallScreen() {
     callService.setCallStateHandler(handleCallState);
 
     return () => {
-      // IMPORTANT: End call FIRST before clearing handlers
-      // Otherwise the endCall state change won't be handled
-      const session = callService.getCurrentSession();
-      if (session && session.state !== 'ended') {
-        console.log('[CallScreen] Ending call on unmount - session still active');
-        callService.endCall();
-      }
-
-      // Now safe to clear handlers and timers
-      callService.setCallStateHandler(null);
+      // Clear timer first
       if (durationTimerRef.current) {
         clearInterval(durationTimerRef.current);
       }
+
+      // Use async IIFE to properly await cleanup
+      (async () => {
+        try {
+          const session = callService.getCurrentSession();
+          if (session && session.state !== 'ended') {
+            console.log('[CallScreen] Ending call on unmount - session still active');
+            await callService.endCall();
+          }
+        } catch (error) {
+          console.error('[CallScreen] Error ending call on unmount:', error);
+        } finally {
+          // Clear handler after cleanup completes
+          callService.setCallStateHandler(null);
+        }
+      })();
     };
   }, [navigation]);
 
@@ -202,9 +209,15 @@ export default function CallScreen() {
   };
 
   // Handle ending call
-  const handleEndCall = () => {
-    callService.endCall();
-    // Navigation will happen in the call state handler when state becomes 'ended'
+  const handleEndCall = async () => {
+    try {
+      await callService.endCall();
+      // Navigation will happen in the call state handler when state becomes 'ended'
+    } catch (error) {
+      console.error('[CallScreen] Error ending call:', error);
+      // Force navigation back on error
+      navigation.goBack();
+    }
   };
 
   // Handle mute toggle

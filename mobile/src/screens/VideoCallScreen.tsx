@@ -137,19 +137,24 @@ export default function VideoCallScreen() {
     });
 
     return () => {
-      // IMPORTANT: End call FIRST before clearing handlers
-      // Otherwise the endCall state change won't be handled
-      const session = callService.getCurrentSession();
-      if (session && session.state !== 'ended') {
-        console.log('[VideoCallScreen] Ending call on unmount - session still active');
-        callService.endCall();
-      }
-
-      // Now safe to clear handlers and state
-      callService.setCallStateHandler(null);
-      callService.setRemoteStreamHandler(null);
-      setLocalStream(null);
-      setRemoteStream(null);
+      // Use async IIFE to properly await cleanup
+      (async () => {
+        try {
+          const session = callService.getCurrentSession();
+          if (session && session.state !== 'ended') {
+            console.log('[VideoCallScreen] Ending call on unmount - session still active');
+            await callService.endCall();
+          }
+        } catch (error) {
+          console.error('[VideoCallScreen] Error ending call on unmount:', error);
+        } finally {
+          // Clear handlers and state after cleanup completes
+          callService.setCallStateHandler(null);
+          callService.setRemoteStreamHandler(null);
+          setLocalStream(null);
+          setRemoteStream(null);
+        }
+      })();
     };
   }, []);
 
@@ -250,10 +255,16 @@ export default function VideoCallScreen() {
     setIsFrontCamera(frontCamera);
   }, []);
 
-  const handleEndCall = useCallback(() => {
-    callService.endCall();
-    // Navigation will happen in handleCallEnded when state becomes 'ended'
-  }, []);
+  const handleEndCall = useCallback(async () => {
+    try {
+      await callService.endCall();
+      // Navigation will happen in handleCallEnded when state becomes 'ended'
+    } catch (error) {
+      console.error('[VideoCallScreen] Error ending call:', error);
+      // Force navigation back on error
+      navigation.goBack();
+    }
+  }, [navigation]);
 
   const handleAcceptCall = useCallback(async () => {
     if (!callId) {

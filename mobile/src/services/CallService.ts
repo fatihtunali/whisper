@@ -962,7 +962,7 @@ class CallService {
           // Only end call if not already cleaning up
           if (!this.isCleaningUp) {
             console.log('[CallService] WebRTC connection failed/disconnected, ending call');
-            this.endCall();
+            await this.endCall();
           }
         }
       } catch (e) {
@@ -1225,7 +1225,7 @@ class CallService {
           this.notifyStateChange('connecting');
         } catch (error) {
           console.error('[CallService] Failed to set remote description:', error);
-          this.endCall();
+          await this.endCall();
         }
         break;
 
@@ -1233,10 +1233,12 @@ class CallService {
         // Call was rejected
         if (this.currentSession?.callId === message.callId) {
           const sessionToClean = this.currentSession;
-          this.currentSession = null;
-          this.notifyStateChange('ended');
-          // Await cleanup to ensure resources are released
-          await this.cleanup(sessionToClean);
+          if (sessionToClean) {
+            this.currentSession = null;
+            this.notifyStateChange('ended');
+            // Await cleanup to ensure resources are released
+            await this.cleanup(sessionToClean);
+          }
         }
         break;
 
@@ -1244,10 +1246,12 @@ class CallService {
         // Call ended by remote peer
         if (this.currentSession?.callId === message.callId) {
           const sessionToClean = this.currentSession;
-          this.currentSession = null;
-          this.notifyStateChange('ended');
-          // Await cleanup to ensure resources are released
-          await this.cleanup(sessionToClean);
+          if (sessionToClean) {
+            this.currentSession = null;
+            this.notifyStateChange('ended');
+            // Await cleanup to ensure resources are released
+            await this.cleanup(sessionToClean);
+          }
         }
         break;
 
