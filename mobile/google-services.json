@@ -1,9 +1,25 @@
 {
   "project_info": {
-    "project_number": "PLACEHOLDER",
-    "project_id": "PLACEHOLDER",
-    "storage_bucket": "PLACEHOLDER"
+    "project_number": "000000000000",
+    "project_id": "whisper-placeholder",
+    "storage_bucket": "whisper-placeholder.appspot.com"
   },
-  "client": [],
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:000000000000:android:0000000000000000000000",
+        "android_client_info": {
+          "package_name": "com.sarjmobile.whisper"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "PLACEHOLDER_API_KEY"
+        }
+      ],
+      "services": {}
+    }
+  ],
   "configuration_version": "1"
 }
