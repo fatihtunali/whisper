@@ -748,7 +748,9 @@ class CallService {
       }
 
       // Replace track in local stream
-      videoTrack.stop();
+      // Don't call videoTrack.stop() directly - it can crash TurboModules on iOS 26
+      // Just disable and remove the track, the GC will clean it up
+      videoTrack.enabled = false;
       (this.localStream as any).removeTrack(videoTrack);
       (this.localStream as any).addTrack(newVideoTrack);
 
@@ -1386,37 +1388,66 @@ class CallService {
         console.warn('[CallService] Failed to load InCallManager for cleanup:', e);
       }
 
-      // Stop local tracks first
+      // Stop local stream - use release() instead of track.stop() to avoid
+      // TurboModule crashes on iOS 26 when stopping video capture
       if (this.localStream) {
         try {
+          // First disable all tracks (safer than stopping)
           const tracks = this.localStream.getTracks();
           tracks.forEach(track => {
             try {
-              track.stop();
-              console.log('[CallService] Stopped track:', track.kind);
+              track.enabled = false;
+              console.log('[CallService] Disabled track:', track.kind);
             } catch (e) {
-              console.warn('[CallService] Failed to stop track:', e);
+              console.warn('[CallService] Failed to disable track:', e);
             }
           });
+
+          // Use release() method if available (react-native-webrtc specific)
+          // This is safer than calling track.stop() which can crash TurboModules on iOS 26
+          if (typeof (this.localStream as any).release === 'function') {
+            (this.localStream as any).release();
+            console.log('[CallService] Released local stream');
+          } else {
+            // Fallback: stop audio tracks only (video track.stop() crashes on iOS 26)
+            tracks.forEach(track => {
+              try {
+                if (track.kind === 'audio') {
+                  track.stop();
+                  console.log('[CallService] Stopped audio track');
+                }
+                // Skip video track.stop() - release() handles it or it will be GC'd
+              } catch (e) {
+                console.warn('[CallService] Failed to stop track:', e);
+              }
+            });
+          }
         } catch (e) {
-          console.warn('[CallService] Failed to get tracks:', e);
+          console.warn('[CallService] Failed to cleanup local stream:', e);
         }
         this.localStream = null;
       }
 
-      // Clear remote stream
+      // Clear remote stream - use release() to avoid TurboModule crashes
       if (this.remoteStream) {
         try {
+          // Disable tracks first
           const tracks = this.remoteStream.getTracks();
           tracks.forEach(track => {
             try {
-              track.stop();
+              track.enabled = false;
             } catch (e) {
-              // Ignore errors stopping remote tracks
+              // Ignore
             }
           });
+
+          // Use release() if available
+          if (typeof (this.remoteStream as any).release === 'function') {
+            (this.remoteStream as any).release();
+            console.log('[CallService] Released remote stream');
+          }
         } catch (e) {
-          // Ignore
+          // Ignore errors on remote stream cleanup
         }
         this.remoteStream = null;
       }
@@ -1536,21 +1567,31 @@ class CallService {
         console.warn('[CallService] Failed to load InCallManager:', e);
       }
 
-      // Stop all tracks
+      // Stop all streams - use release() to avoid TurboModule crashes on iOS 26
       if (this.localStream) {
         try {
+          // Disable all tracks first
           this.localStream.getTracks().forEach(track => {
-            try { track.stop(); } catch (e) {}
+            try { track.enabled = false; } catch (e) {}
           });
+          // Use release() if available (safer than track.stop() for video)
+          if (typeof (this.localStream as any).release === 'function') {
+            (this.localStream as any).release();
+          }
         } catch (e) {}
         this.localStream = null;
       }
 
       if (this.remoteStream) {
         try {
+          // Disable all tracks first
           this.remoteStream.getTracks().forEach(track => {
-            try { track.stop(); } catch (e) {}
+            try { track.enabled = false; } catch (e) {}
           });
+          // Use release() if available
+          if (typeof (this.remoteStream as any).release === 'function') {
+            (this.remoteStream as any).release();
+          }
         } catch (e) {}
         this.remoteStream = null;
       }
