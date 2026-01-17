@@ -95,24 +95,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
               // Use setTimeout to ensure navigation happens after any current navigation completes
               setTimeout(() => {
-                if (isVideo) {
-                  navigate('VideoCall', {
-                    contactId: data.fromWhisperId,
-                    isIncoming: true,
-                    callId: data.callId,
-                  });
-                } else {
-                  navigate('Call', {
-                    contactId: data.fromWhisperId,
-                    isIncoming: true,
-                    callId: data.callId,
-                  });
+                try {
+                  if (isVideo) {
+                    navigate('VideoCall', {
+                      contactId: data.fromWhisperId,
+                      isIncoming: true,
+                      callId: data.callId,
+                    });
+                  } else {
+                    navigate('Call', {
+                      contactId: data.fromWhisperId,
+                      isIncoming: true,
+                      callId: data.callId,
+                    });
+                  }
+                } catch (navError) {
+                  console.error('[AuthContext] Navigation to call screen failed:', navError);
                 }
               }, 100);
             } else if (data?.type === 'new_message' && data?.fromWhisperId) {
               // Navigate to chat with the sender
               console.log('[AuthContext] Navigating to chat from notification:', data);
-              navigate('Chat', { contactId: data.fromWhisperId });
+              try {
+                navigate('Chat', { contactId: data.fromWhisperId });
+              } catch (navError) {
+                console.error('[AuthContext] Navigation to chat failed:', navError);
+              }
             }
           }
         );
@@ -207,23 +215,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const isVideo = payload?.isVideo === true || payload?.hasVideo === true;
 
           // Navigate to call screen - user may have already answered via CallKit
+          // Use longer delay for cold-start to let navigation be ready
           setTimeout(() => {
-            if (isVideo) {
-              navigate('VideoCall', {
-                contactId: fromWhisperId,
-                isIncoming: true,
-                callId,
-                isColdStart: true, // Signal that this is a cold start
-              });
-            } else {
-              navigate('Call', {
-                contactId: fromWhisperId,
-                isIncoming: true,
-                callId,
-                isColdStart: true, // Signal that this is a cold start
-              });
+            try {
+              if (isVideo) {
+                navigate('VideoCall', {
+                  contactId: fromWhisperId,
+                  isIncoming: true,
+                  callId,
+                  isColdStart: true, // Signal that this is a cold start
+                });
+              } else {
+                navigate('Call', {
+                  contactId: fromWhisperId,
+                  isIncoming: true,
+                  callId,
+                  isColdStart: true, // Signal that this is a cold start
+                });
+              }
+            } catch (navError) {
+              console.error('[AuthContext] Cold-start navigation failed:', navError);
             }
-          }, 100);
+          }, 500); // Longer delay for cold-start
         };
 
         // iOS: Handle audio session activation/deactivation from CallKit
@@ -240,8 +253,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           };
         }
 
-        // CRITICAL: Mark handlers as ready so queued cold-start events are processed
-        callKeepService.markHandlersReady();
+        // CRITICAL: Delay markHandlersReady until WebSocket is likely connected
+        // This prevents race condition where cold-start events are processed
+        // before the messaging service is fully connected
+        // Wait 2 seconds to let WebSocket connect and JS runtime stabilize
+        setTimeout(() => {
+          try {
+            console.log('[AuthContext] Processing cold-start events after delay');
+            callKeepService.markHandlersReady();
+          } catch (e) {
+            console.error('[AuthContext] Error in markHandlersReady:', e);
+          }
+        }, 2000);
         } catch (callKeepError) {
           console.error('[AuthContext] Failed to set up CallKeep handlers:', callKeepError);
         }
@@ -252,18 +275,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('[AuthContext] VoIP incoming call:', { callId, fromWhisperId, isVideo, callerName });
           // Navigate to call screen
           setTimeout(() => {
-            if (isVideo) {
-              navigate('VideoCall', {
-                contactId: fromWhisperId,
-                isIncoming: true,
-                callId,
-              });
-            } else {
-              navigate('Call', {
-                contactId: fromWhisperId,
-                isIncoming: true,
-                callId,
-              });
+            try {
+              if (isVideo) {
+                navigate('VideoCall', {
+                  contactId: fromWhisperId,
+                  isIncoming: true,
+                  callId,
+                });
+              } else {
+                navigate('Call', {
+                  contactId: fromWhisperId,
+                  isIncoming: true,
+                  callId,
+                });
+              }
+            } catch (navError) {
+              console.error('[AuthContext] VoIP call navigation failed:', navError);
             }
           }, 100);
         };

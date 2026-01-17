@@ -449,42 +449,58 @@ class CallKeepService {
     return RNCallKeep !== null && this.initialized;
   }
 
-  // Process a cold start event
+  // Process a cold start event - wrapped in try/catch to prevent TurboModule crashes
   private processColdStartEvent(name: string, data: any): void {
     console.log('[CallKeepService] Processing cold start event:', name);
 
-    switch (name) {
-      case 'RNCallKeepPerformAnswerCallAction':
-        if (this.onAnswerCall && data?.callUUID) {
-          console.log('[CallKeepService] Processing queued answerCall:', data.callUUID);
-          this.onAnswerCall(data.callUUID);
-        }
-        break;
+    try {
+      switch (name) {
+        case 'RNCallKeepPerformAnswerCallAction':
+          if (this.onAnswerCall && data?.callUUID) {
+            console.log('[CallKeepService] Processing queued answerCall:', data.callUUID);
+            try {
+              this.onAnswerCall(data.callUUID);
+            } catch (e) {
+              console.error('[CallKeepService] Error in onAnswerCall handler:', e);
+            }
+          }
+          break;
 
-      case 'RNCallKeepPerformEndCallAction':
-        if (this.onEndCall && data?.callUUID) {
-          console.log('[CallKeepService] Processing queued endCall:', data.callUUID);
-          this.onEndCall(data.callUUID);
-        }
-        this.activeCallId = null;
-        break;
+        case 'RNCallKeepPerformEndCallAction':
+          if (this.onEndCall && data?.callUUID) {
+            console.log('[CallKeepService] Processing queued endCall:', data.callUUID);
+            try {
+              this.onEndCall(data.callUUID);
+            } catch (e) {
+              console.error('[CallKeepService] Error in onEndCall handler:', e);
+            }
+          }
+          this.activeCallId = null;
+          break;
 
-      case 'RNCallKeepDidDisplayIncomingCall':
-        // Incoming call was displayed via native code (from VoIP push)
-        // This happens when app is cold-started by VoIP push
-        if (this.onColdStartIncomingCall && data?.callUUID) {
-          console.log('[CallKeepService] Processing cold start incoming call:', data.callUUID);
-          this.onColdStartIncomingCall(data.callUUID, data.payload || data);
-        }
-        break;
+        case 'RNCallKeepDidDisplayIncomingCall':
+          // Incoming call was displayed via native code (from VoIP push)
+          // This happens when app is cold-started by VoIP push
+          if (this.onColdStartIncomingCall && data?.callUUID) {
+            console.log('[CallKeepService] Processing cold start incoming call:', data.callUUID);
+            try {
+              this.onColdStartIncomingCall(data.callUUID, data.payload || data);
+            } catch (e) {
+              console.error('[CallKeepService] Error in onColdStartIncomingCall handler:', e);
+            }
+          }
+          break;
 
-      case 'RNCallKeepDidReceiveStartCallAction':
-        // User started an outgoing call from native UI (e.g., recent calls)
-        console.log('[CallKeepService] Start call action from native UI:', data);
-        break;
+        case 'RNCallKeepDidReceiveStartCallAction':
+          // User started an outgoing call from native UI (e.g., recent calls)
+          console.log('[CallKeepService] Start call action from native UI:', data);
+          break;
 
-      default:
-        console.log('[CallKeepService] Unhandled cold start event:', name);
+        default:
+          console.log('[CallKeepService] Unhandled cold start event:', name);
+      }
+    } catch (error) {
+      console.error('[CallKeepService] Error processing cold start event:', name, error);
     }
   }
 
