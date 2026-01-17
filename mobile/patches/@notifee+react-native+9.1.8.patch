@@ -93,10 +93,21 @@ index 8f308dd..6f2001c 100644
    if ([permissions[@"carPlay"] isEqual:@(YES)]) {
      options |= UNAuthorizationOptionCarPlay;
 diff --git a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
-index a42f938..4e49af5 100644
+index a42f938..36901e7 100644
 --- a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
 +++ b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
-@@ -403,6 +403,8 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
+@@ -286,8 +286,9 @@ + (NSDictionary *)attachmentOptionsFromDictionary:(NSDictionary *)optionsDict {
+     NSNumber *height = area[@"height"];
+     CGRect areaRect =
+         CGRectMake([x doubleValue], [y doubleValue], [width doubleValue], [height doubleValue]);
++    CFDictionaryRef rectDict = CGRectCreateDictionaryRepresentation(areaRect);
+     options[UNNotificationAttachmentOptionsThumbnailClippingRectKey] =
+-        (__bridge id _Nullable)(CGRectCreateDictionaryRepresentation(areaRect));
++        (__bridge_transfer id _Nullable)(rectDict);
+   }
+ 
+   if (optionsDict[@"thumbnailTime"] != nil) {
+@@ -403,6 +404,8 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
    return [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:intervalInSeconds repeats:true];
  }
  
@@ -105,7 +116,7 @@ index a42f938..4e49af5 100644
  + (NSMutableArray<NSNumber *> *)intentIdentifiersFromStringArray:
      (NSArray<NSString *> *)identifiers {
    NSMutableArray<NSNumber *> *intentIdentifiers = [[NSMutableArray alloc] init];
-@@ -488,7 +490,10 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
+@@ -488,7 +491,10 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
  
    return intentIdentifiers;
  }
@@ -116,7 +127,7 @@ index a42f938..4e49af5 100644
  + (NSMutableArray<NSString *> *)intentIdentifiersFromNumberArray:
      (NSArray<NSNumber *> *)identifiers {
    NSMutableArray<NSString *> *intentIdentifiers = [[NSMutableArray alloc] init];
-@@ -574,6 +579,7 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
+@@ -574,6 +580,7 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
  
    return intentIdentifiers;
  }
