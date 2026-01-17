@@ -11,6 +11,7 @@ import { rateLimiter } from '../services/RateLimiter';
 import { groupStore } from '../services/GroupStore';
 import { generateTurnCredentials } from '../index';
 import { pushService } from '../services/PushService';
+import { callQueue } from '../services/CallQueue';
 import {
   ClientMessage,
   ServerMessage,
@@ -323,6 +324,31 @@ export class WebSocketServer {
         },
       };
       this.send(socket, groupCreatedMessage);
+    }
+
+    // Deliver any pending calls (when user was offline and someone tried to call them)
+    const pendingCall = callQueue.getPendingCall(whisperId);
+    if (pendingCall) {
+      console.log(`[WebSocket] Delivering pending call to ${whisperId}: callId=${pendingCall.callId}, from=${pendingCall.fromWhisperId}`);
+
+      // Check if the caller is still online and waiting
+      const caller = connectionManager.get(pendingCall.fromWhisperId);
+      if (caller) {
+        // Send the incoming call to the recipient
+        const incomingCallMessage: IncomingCallMessage = {
+          type: 'incoming_call',
+          payload: {
+            fromWhisperId: pendingCall.fromWhisperId,
+            callId: pendingCall.callId,
+            offer: pendingCall.offer,
+            isVideo: pendingCall.isVideo,
+          },
+        };
+        this.send(socket, incomingCallMessage);
+        console.log(`[WebSocket] Pending call delivered to ${whisperId}`);
+      } else {
+        console.log(`[WebSocket] Caller ${pendingCall.fromWhisperId} is no longer online, discarding pending call`);
+      }
     }
 
     const hidden = prefs?.hideOnlineStatus ? ' [hidden]' : '';
@@ -894,8 +920,27 @@ export class WebSocketServer {
       }
 
       if (pushSent) {
-        // At least one push was sent - don't send error, phone might still ring
-        console.log(`[WebSocket] Call notification sent to ${toWhisperId}, waiting for response...`);
+        // Queue the call offer so recipient can receive it when they come online
+        callQueue.queueCall(
+          toWhisperId,
+          client.whisperId,
+          callId,
+          offer,
+          isVideo || false,
+          callerName
+        );
+
+        // Tell the caller that the recipient's phone is being notified (ringing)
+        // This changes caller UI from "Calling..." to "Ringing..."
+        this.send(socket, {
+          type: 'call_ringing',
+          payload: {
+            callId,
+            toWhisperId,
+          },
+        });
+
+        console.log(`[WebSocket] Call queued and notification sent to ${toWhisperId}, waiting for response...`);
       } else {
         // No push could be sent - truly unreachable
         console.warn(`[WebSocket] No push token available for ${toWhisperId}`);
@@ -981,6 +1026,9 @@ export class WebSocketServer {
     }
 
     const { toWhisperId, callId } = payload;
+
+    // Cancel any pending call for this callId (if recipient was offline)
+    callQueue.cancelCall(callId);
 
     // Forward call end to peer if online
     const recipient = connectionManager.get(toWhisperId);
