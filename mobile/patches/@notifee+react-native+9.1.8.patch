@@ -1,0 +1,80 @@
+diff --git a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore+UNUserNotificationCenter.m b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore+UNUserNotificationCenter.m
+index beaa360..773f73d 100644
+--- a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore+UNUserNotificationCenter.m
++++ b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore+UNUserNotificationCenter.m
+@@ -125,6 +125,8 @@ - (void)userNotificationCenter:(UNUserNotificationCenter *)center
+     }
+ 
+     // if list or banner is true, ignore alert property
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+     if (banner || list) {
+       if (banner) {
+         if (@available(iOS 14, *)) {
+@@ -147,6 +149,7 @@ - (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       // TODO: remove alert once it has been fully removed from the notifee API
+       presentationOptions |= UNNotificationPresentationOptionAlert;
+     }
++#pragma clang diagnostic pop
+ 
+     NSDictionary *notifeeTrigger = notification.request.content.userInfo[kNotifeeUserInfoTrigger];
+     if (notifeeTrigger != nil) {
+diff --git a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m
+index 8f308dd..d985cb7 100644
+--- a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m
++++ b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m
+@@ -423,17 +423,20 @@ + (UNMutableNotificationContent *)buildNotificationContent:(NSDictionary *)notif
+     content.threadIdentifier = iosDict[@"threadId"];
+   }
+ 
++  #pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+   if (@available(iOS 12.0, *)) {
+-    // summaryArgument
++    // summaryArgument (deprecated in iOS 15, but needed for iOS 12-14)
+     if (iosDict[@"summaryArgument"] != nil) {
+       content.summaryArgument = iosDict[@"summaryArgument"];
+     }
+ 
+-    // summaryArgumentCount
++    // summaryArgumentCount (deprecated in iOS 15, but needed for iOS 12-14)
+     if (iosDict[@"summaryArgumentCount"] != nil) {
+       content.summaryArgumentCount = [iosDict[@"summaryArgumentCount"] unsignedIntValue];
+     }
+   }
++#pragma clang diagnostic pop
+ 
+   if (@available(iOS 13.0, *)) {
+     // targetContentId
+diff --git a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
+index a42f938..4e49af5 100644
+--- a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
++++ b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
+@@ -403,6 +403,8 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
+   return [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:intervalInSeconds repeats:true];
+ }
+ 
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+ + (NSMutableArray<NSNumber *> *)intentIdentifiersFromStringArray:
+     (NSArray<NSString *> *)identifiers {
+   NSMutableArray<NSNumber *> *intentIdentifiers = [[NSMutableArray alloc] init];
+@@ -488,7 +490,10 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
+ 
+   return intentIdentifiers;
+ }
++#pragma clang diagnostic pop
+ 
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+ + (NSMutableArray<NSString *> *)intentIdentifiersFromNumberArray:
+     (NSArray<NSNumber *> *)identifiers {
+   NSMutableArray<NSString *> *intentIdentifiers = [[NSMutableArray alloc] init];
+@@ -574,6 +579,7 @@ + (UNNotificationTrigger *)intervalTriggerFromDictionary:(NSDictionary *)trigger
+ 
+   return intentIdentifiers;
+ }
++#pragma clang diagnostic pop
+ 
+ /**
+  * Returns timestamp in millisecons

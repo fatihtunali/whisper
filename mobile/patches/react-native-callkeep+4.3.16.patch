@@ -1,7 +1,31 @@
+diff --git a/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.h b/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.h
+index c8e7bbd..aa82390 100644
+--- a/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.h
++++ b/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.h
+@@ -45,6 +45,6 @@ continueUserActivity:(NSUserActivity *)userActivity
+ 
+ + (BOOL)isCallActive:(NSString *)uuidString;
+ 
+-+ (void)setup:(NSDictionary *)options;
+++ (void)setup:(NSDictionary * _Nullable)options;
+ 
+ @end
 diff --git a/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m b/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m
-index 786045f..c96f072 100644
+index 786045f..8ed61c9 100644
 --- a/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m
 +++ b/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m
+@@ -18,9 +18,9 @@
+ #import <CallKit/CallKit.h>
+ 
+ #ifdef DEBUG
+-static int const OUTGOING_CALL_WAKEUP_DELAY = 10;
++static int const OUTGOING_CALL_WAKEUP_DELAY __attribute__((unused)) = 10;
+ #else
+-static int const OUTGOING_CALL_WAKEUP_DELAY = 5;
++static int const OUTGOING_CALL_WAKEUP_DELAY __attribute__((unused)) = 5;
+ #endif
+ 
+ static NSString *const RNCallKeepHandleStartCallNotification = @"RNCallKeepHandleStartCallNotification";
 @@ -538,7 +538,7 @@ + (void)setup:(NSDictionary *)options {
      }
      @catch ( NSException *e ){
@@ -26,3 +50,79 @@ index 786045f..c96f072 100644
      }
  }
  
+@@ -593,16 +593,15 @@ + (NSMutableArray *) formatAudioInputs: (NSMutableArray *)inputs
+ + (NSArray *) getAudioInputs
+ {
+     NSError* err = nil;
+-    NSString *str = nil;
+ 
+     AVAudioSession* myAudioSession = [AVAudioSession sharedInstance];
+     NSString *category = [myAudioSession category];
+     NSUInteger options = [myAudioSession categoryOptions];
+ 
+ 
+-    if(![category isEqualToString:AVAudioSessionCategoryPlayAndRecord] && (options != AVAudioSessionCategoryOptionAllowBluetooth) && (options !=AVAudioSessionCategoryOptionAllowBluetoothA2DP))
++    if(![category isEqualToString:AVAudioSessionCategoryPlayAndRecord] && (options != AVAudioSessionCategoryOptionAllowBluetoothA2DP))
+     {
+-        BOOL isCategorySetted = [myAudioSession setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionAllowBluetooth error:&err];
++        BOOL isCategorySetted = [myAudioSession setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:AVAudioSessionCategoryOptionAllowBluetoothA2DP error:&err];
+         if (!isCategorySetted)
+         {
+             NSLog(@"setCategory failed");
+@@ -980,40 +979,38 @@ + (BOOL)application:(UIApplication *)application
+     BOOL isAudioCall;
+     BOOL isVideoCall;
+ 
+-    // HACK TO AVOID XCODE 10 COMPILE CRASH
+-    // REMOVE ON NEXT MAJOR RELEASE OF RNCALLKIT
++    // Use INStartCallIntent for iOS 13+ (modern API)
+ #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
+-    //XCode 11
+-    // iOS 13 returns an INStartCallIntent userActivity type
+     if (@available(iOS 13, *)) {
+         INStartCallIntent *intent = (INStartCallIntent*)interaction.intent;
+-        // callCapability is not available on iOS > 13.2, but it is in 13.1 weirdly...
+         if ([intent respondsToSelector:@selector(callCapability)]) {
+             isAudioCall = intent.callCapability == INCallCapabilityAudioCall;
+             isVideoCall = intent.callCapability == INCallCapabilityVideoCall;
+         } else {
+-            isAudioCall = [userActivity.activityType isEqualToString:INStartAudioCallIntentIdentifier];
+-            isVideoCall = [userActivity.activityType isEqualToString:INStartVideoCallIntentIdentifier];
++            // Fallback: check activity type using modern identifier
++            isAudioCall = [userActivity.activityType isEqualToString:INStartCallIntentIdentifier];
++            isVideoCall = NO; // Video determined by callCapability
+         }
++        contact = [intent.contacts firstObject];
+     } else {
+ #endif
+-        // XCode 10 and below
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++        // Legacy path for iOS < 13
+         isAudioCall = [userActivity.activityType isEqualToString:INStartAudioCallIntentIdentifier];
+         isVideoCall = [userActivity.activityType isEqualToString:INStartVideoCallIntentIdentifier];
+-        // HACK TO AVOID XCODE 10 COMPILE CRASH
+-        // REMOVE ON NEXT MAJOR RELEASE OF RNCALLKIT
++        if (isAudioCall) {
++            INStartAudioCallIntent *startAudioCallIntent = (INStartAudioCallIntent *)interaction.intent;
++            contact = [startAudioCallIntent.contacts firstObject];
++        } else if (isVideoCall) {
++            INStartVideoCallIntent *startVideoCallIntent = (INStartVideoCallIntent *)interaction.intent;
++            contact = [startVideoCallIntent.contacts firstObject];
++        }
++#pragma clang diagnostic pop
+ #if __IPHONE_OS_VERSION_MAX_ALLOWED >= 130000
+     }
+ #endif
+ 
+-    if (isAudioCall) {
+-        INStartAudioCallIntent *startAudioCallIntent = (INStartAudioCallIntent *)interaction.intent;
+-        contact = [startAudioCallIntent.contacts firstObject];
+-    } else if (isVideoCall) {
+-        INStartVideoCallIntent *startVideoCallIntent = (INStartVideoCallIntent *)interaction.intent;
+-        contact = [startVideoCallIntent.contacts firstObject];
+-    }
+-
+     if (contact != nil) {
+         handle = contact.personHandle.value;
+     }
