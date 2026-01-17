@@ -1,0 +1,13 @@
+diff --git a/node_modules/react-native-voip-push-notification/ios/RNVoipPushNotification/RNVoipPushNotificationManager.h b/node_modules/react-native-voip-push-notification/ios/RNVoipPushNotification/RNVoipPushNotificationManager.h
+index 054ef59..97c12bf 100644
+--- a/node_modules/react-native-voip-push-notification/ios/RNVoipPushNotification/RNVoipPushNotificationManager.h
++++ b/node_modules/react-native-voip-push-notification/ios/RNVoipPushNotification/RNVoipPushNotificationManager.h
+@@ -12,7 +12,7 @@
+ #import <React/RCTEventEmitter.h>
+ #import <PushKit/PushKit.h>
+ 
+-@interface RNVoipPushNotificationManager : RCTEventEmitter <RCTBridgeModule>
++@interface RNVoipPushNotificationManager : RCTEventEmitter <RCTBridgeModule, PKPushRegistryDelegate>
+ 
+ typedef void (^RNVoipPushNotificationCompletion)(void);
+ 

@@ -20,7 +20,7 @@ index beaa360..773f73d 100644
      NSDictionary *notifeeTrigger = notification.request.content.userInfo[kNotifeeUserInfoTrigger];
      if (notifeeTrigger != nil) {
 diff --git a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m
-index 8f308dd..d985cb7 100644
+index 8f308dd..6f2001c 100644
 --- a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m
 +++ b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCore.m
 @@ -423,17 +423,20 @@ + (UNMutableNotificationContent *)buildNotificationContent:(NSDictionary *)notif
@@ -46,6 +46,52 @@ index 8f308dd..d985cb7 100644
  
    if (@available(iOS 13.0, *)) {
      // targetContentId
+@@ -488,12 +491,15 @@ + (void)getNotificationCategories:(notifeeMethodNSArrayBlock)block {
+         }
+       }
+ 
++      #pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+       if (@available(iOS 13.0, *)) {
+         categoryDictionary[@"allowAnnouncement"] = @(
+             ((notificationCategory.options & UNNotificationCategoryOptionAllowAnnouncement) != 0));
+       } else {
+         categoryDictionary[@"allowAnnouncement"] = @(NO);
+       }
++#pragma clang diagnostic pop
+ 
+       categoryDictionary[@"actions"] =
+           [NotifeeCoreUtil notificationActionsToDictionaryArray:notificationCategory.actions];
+@@ -546,11 +552,14 @@ + (void)setNotificationCategories:(NSArray<NSDictionary *> *)categories
+       }
+     }
+ 
++    #pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+     if (@available(iOS 13.0, *)) {
+       if ([categoryDictionary[@"allowAnnouncement"] isEqual:@(YES)]) {
+         options |= UNNotificationCategoryOptionAllowAnnouncement;
+       }
+     }
++#pragma clang diagnostic pop
+ 
+     if (@available(iOS 12.0, *)) {
+       category = [UNNotificationCategory categoryWithIdentifier:id
+@@ -617,11 +626,14 @@ + (void)requestPermission:(NSDictionary *)permissions
+     }
+   }
+ 
++  #pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+   if ([permissions[@"announcement"] isEqual:@(YES)]) {
+     if (@available(iOS 13.0, *)) {
+       options |= UNAuthorizationOptionAnnouncement;
+     }
+   }
++#pragma clang diagnostic pop
+ 
+   if ([permissions[@"carPlay"] isEqual:@(YES)]) {
+     options |= UNAuthorizationOptionCarPlay;
 diff --git a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m b/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
 index a42f938..4e49af5 100644
 --- a/node_modules/@notifee/react-native/ios/NotifeeCore/NotifeeCoreUtil.m
