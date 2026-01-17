@@ -1,0 +1,28 @@
+diff --git a/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m b/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m
+index 786045f..c96f072 100644
+--- a/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m
++++ b/node_modules/react-native-callkeep/ios/RNCallKeep/RNCallKeep.m
+@@ -538,7 +538,7 @@ + (void)setup:(NSDictionary *)options {
+     }
+     @catch ( NSException *e ){
+         NSLog(@"[RNCallKeep][setAudioRoute] exception: %@",e);
+-        reject(@"Failure to set audio route", e, nil);
++        reject(@"setAudioRoute_error", e.reason ?: e.description, nil);
+     }
+ }
+ 
+@@ -550,12 +550,12 @@ + (void)setup:(NSDictionary *)options {
+ #endif
+     @try {
+         NSArray *inputs = [RNCallKeep getAudioInputs];
+-        NSMutableArray *formatedInputs = [RNCallKeep formatAudioInputs: inputs];
++        NSMutableArray *formatedInputs = [RNCallKeep formatAudioInputs: [inputs mutableCopy]];
+         resolve(formatedInputs);
+     }
+     @catch ( NSException *e ) {
+         NSLog(@"[RNCallKeep][getAudioRoutes] exception: %@",e);
+-        reject(@"Failure to get audio routes", e, nil);
++        reject(@"getAudioRoutes_error", e.reason ?: e.description, nil);
+     }
+ }
+ 
