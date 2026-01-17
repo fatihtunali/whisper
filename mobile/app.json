@@ -37,7 +37,7 @@
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.sarjmobile.whisper",
       "versionCode": 41,
-      "googleServicesFile": "./android/google-services.json",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
