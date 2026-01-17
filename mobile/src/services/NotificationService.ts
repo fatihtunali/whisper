@@ -169,15 +169,17 @@ class NotificationService {
     const { callId, fromWhisperId, callerName, isVideo } = notification;
 
     if (callId && fromWhisperId) {
-      // Display native call UI
-      callKeepService.displayIncomingCall(
-        callId,
-        callerName || 'Unknown Caller',
-        fromWhisperId,
-        isVideo || false
-      );
+      // NOTE: We do NOT call displayIncomingCall here because:
+      // 1. The native code (AppDelegate) already called reportNewIncomingCall via RNCallKeep
+      // 2. CallKit UI is already showing to the user
+      // 3. Calling displayIncomingCall again would cause duplicate/conflicting UUIDs
+      //
+      // The native code uses the same callId from the payload, so when CallKeep events
+      // fire (answerCall, endCall), they will have the correct callId that matches our JS state.
 
-      // Notify app about incoming call
+      console.log('[NotificationService] VoIP push processed - CallKit UI already shown by native code');
+
+      // Just notify app about incoming call so it can set up the call state
       if (this.onIncomingCall) {
         this.onIncomingCall(callId, fromWhisperId, isVideo || false, callerName || 'Unknown');
       }

@@ -196,6 +196,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.log('[AuthContext] Ignoring CallKeep end for different/stale call:', callId);
           }
         };
+
+        // Handle cold-start incoming calls (app was killed, VoIP push woke it up)
+        // This happens when native code already showed the CallKit UI before JS was ready
+        callKeepService.onColdStartIncomingCall = async (callId, payload) => {
+          console.log('[AuthContext] Cold start incoming call:', { callId, payload });
+
+          // Extract call info from payload (sent by native VoIP push handler)
+          const fromWhisperId = payload?.fromWhisperId || payload?.handle || 'Unknown';
+          const isVideo = payload?.isVideo === true || payload?.hasVideo === true;
+
+          // Navigate to call screen - user may have already answered via CallKit
+          setTimeout(() => {
+            if (isVideo) {
+              navigate('VideoCall', {
+                contactId: fromWhisperId,
+                isIncoming: true,
+                callId,
+                isColdStart: true, // Signal that this is a cold start
+              });
+            } else {
+              navigate('Call', {
+                contactId: fromWhisperId,
+                isIncoming: true,
+                callId,
+                isColdStart: true, // Signal that this is a cold start
+              });
+            }
+          }, 100);
+        };
+
+        // iOS: Handle audio session activation/deactivation from CallKit
+        // This is CRITICAL when RTCAudioSession.useManualAudio = true (set in native code)
+        if (Platform.OS === 'ios') {
+          callKeepService.onAudioSessionActivated = () => {
+            console.log('[AuthContext] CallKit audio session activated - WebRTC audio should now work');
+            // The native RTCAudioSession handles this automatically via the CXProviderDelegate
+            // that RNCallKeep implements. We just log it here for debugging.
+          };
+
+          callKeepService.onAudioSessionDeactivated = () => {
+            console.log('[AuthContext] CallKit audio session deactivated');
+          };
+        }
+
+        // CRITICAL: Mark handlers as ready so queued cold-start events are processed
+        callKeepService.markHandlersReady();
         } catch (callKeepError) {
           console.error('[AuthContext] Failed to set up CallKeep handlers:', callKeepError);
         }
@@ -234,6 +280,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callService.setIncomingCallHandler(null);
         callKeepService.onAnswerCall = null;
         callKeepService.onEndCall = null;
+        callKeepService.onColdStartIncomingCall = null;
+        callKeepService.onAudioSessionActivated = null;
+        callKeepService.onAudioSessionDeactivated = null;
       };
     }
   }, [user]);

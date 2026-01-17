@@ -27,12 +27,14 @@ function getProjectName(config) {
   return config.modRequest.projectName || config.name.replace(/[^a-zA-Z0-9]/g, '');
 }
 
-// Step 1: Ensure Info.plist has VoIP background mode
+// Step 1: Ensure Info.plist has VoIP and audio background modes
 function withVoipInfoPlist(config) {
   return withInfoPlist(config, (config) => {
     const bgModes = config.modResults.UIBackgroundModes || [];
 
-    const requiredModes = ['voip', 'remote-notification', 'fetch'];
+    // CRITICAL: 'audio' mode keeps audio session alive during calls
+    // 'voip' mode enables VoIP push notifications
+    const requiredModes = ['voip', 'audio', 'remote-notification', 'fetch'];
     for (const mode of requiredModes) {
       if (!bgModes.includes(mode)) {
         bgModes.push(mode);
@@ -153,16 +155,20 @@ function modifySwiftAppDelegate(contents) {
   }
 
   // 2. Add VoIP registration in didFinishLaunchingWithOptions
+  // NOTE: RTCAudioSession is configured by InCallManager when calls start
+  // We do NOT configure it here to avoid race conditions with CallKit
   if (!contents.includes('RNVoipPushNotificationManager.voipRegistration')) {
     // Find the didFinishLaunchingWithOptions method and add registration after super call
     // Pattern for: return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     const superCallPattern = /(return\s+super\.application\s*\(\s*application\s*,\s*didFinishLaunchingWithOptions\s*:\s*launchOptions\s*\))/;
 
+    const initCode = `// VoIP Push Registration - must be called early for incoming call handling
+    RNVoipPushNotificationManager.voipRegistration()`;
+
     if (superCallPattern.test(contents)) {
       contents = contents.replace(
         superCallPattern,
-        `// VoIP Push Registration - must be called early
-    RNVoipPushNotificationManager.voipRegistration()
+        `${initCode}
 
     $1`
       );
@@ -174,8 +180,7 @@ function modifySwiftAppDelegate(contents) {
         contents = contents.replace(
           didFinishPattern,
           `$1
-    // VoIP Push Registration - must be called early
-    RNVoipPushNotificationManager.voipRegistration()
+    ${initCode}
 `
         );
       }
@@ -198,14 +203,21 @@ extension AppDelegate: PKPushRegistryDelegate {
   public func pushRegistry(_ registry: PKPushRegistry, didReceiveIncomingPushWith payload: PKPushPayload, for type: PKPushType, completion: @escaping () -> Void) {
     print("[Whisper] VoIP Push received with payload: \\(payload.dictionaryPayload)")
 
-    let uuidString = UUID().uuidString.lowercased()
-    let callerName = payload.dictionaryPayload["fromWhisperId"] as? String ?? "Incoming Call"
+    // CRITICAL: Use callId from payload as UUID for consistency between native and JS
+    // This ensures the same UUID is used when CallKit reports the call and when JS manages it
+    let callId = payload.dictionaryPayload["callId"] as? String ?? UUID().uuidString.lowercased()
+    let fromWhisperId = payload.dictionaryPayload["fromWhisperId"] as? String ?? "Unknown"
+    let callerName = payload.dictionaryPayload["callerName"] as? String ?? fromWhisperId
     let hasVideo = payload.dictionaryPayload["isVideo"] as? Bool ?? false
 
-    // Report to CallKit via RNCallKeep (triggers native call UI)
+    print("[Whisper] Reporting incoming call - callId: \\(callId), from: \\(fromWhisperId), video: \\(hasVideo)")
+
+    // CRITICAL: Report to CallKit IMMEDIATELY via RNCallKeep
+    // The completion handler is passed to RNCallKeep which calls it AFTER reportNewIncomingCall completes
+    // This is required by iOS 13+ - completion must be called AFTER reporting the call
     RNCallKeep.reportNewIncomingCall(
-      uuidString,
-      handle: callerName,
+      callId,
+      handle: fromWhisperId,
       handleType: "generic",
       hasVideo: hasVideo,
       localizedCallerName: callerName,
@@ -218,7 +230,7 @@ extension AppDelegate: PKPushRegistryDelegate {
       withCompletionHandler: completion
     )
 
-    // Forward to VoIP manager for JS event
+    // Forward to VoIP manager for JS event (after CallKit is notified)
     RNVoipPushNotificationManager.didReceiveIncomingPush(with: payload, forType: type.rawValue)
   }
 
@@ -226,6 +238,10 @@ extension AppDelegate: PKPushRegistryDelegate {
     print("[Whisper] VoIP Push token invalidated for type: \\(type.rawValue)")
   }
 }
+
+// NOTE: CXProviderDelegate is handled by RNCallKeep
+// The RTCAudioSession.useManualAudio = true is set in didFinishLaunchingWithOptions
+// RNCallKeep emits 'didActivateAudioSession' event which is handled in JS
 `;
 
     // Append extension to the end of the file

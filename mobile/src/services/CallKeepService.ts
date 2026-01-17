@@ -73,10 +73,21 @@ class CallKeepService {
   private activeCallId: string | null = null;
   private callHandlers: Map<string, CallKeepEventHandler> = new Map();
 
+  // Cold-start event queue - stores events that fired before handlers were ready
+  private coldStartEvents: Array<{ name: string; data: any }> = [];
+  private handlersReady: boolean = false;
+
   // Callbacks for call events
   public onAnswerCall: ((callId: string) => void) | null = null;
   public onEndCall: ((callId: string) => void) | null = null;
   public onMuteCall: ((muted: boolean, callId: string) => void) | null = null;
+
+  // Callback for incoming call from cold start (VoIP push woke the app)
+  public onColdStartIncomingCall: ((callId: string, payload: any) => void) | null = null;
+
+  // Callbacks for audio session events (iOS) - CRITICAL for WebRTC audio with CallKit
+  public onAudioSessionActivated: (() => void) | null = null;
+  public onAudioSessionDeactivated: (() => void) | null = null;
 
   async initialize(): Promise<boolean> {
     if (this.initialized) return true;
@@ -140,11 +151,34 @@ class CallKeepService {
   private setupEventListeners(): void {
     if (!RNCallKeep) return;
 
+    // CRITICAL: Handle events that fired BEFORE JavaScript was ready
+    // This catches answerCall/endCall events from cold start (VoIP push woke app)
+    RNCallKeep.addEventListener('didLoadWithEvents', (events: any[]) => {
+      console.log('[CallKeepService] didLoadWithEvents - received', events?.length || 0, 'events');
+      if (!events || events.length === 0) return;
+
+      events.forEach((event) => {
+        console.log('[CallKeepService] Cold start event:', event.name, event.data);
+
+        // Queue events for processing once handlers are ready
+        this.coldStartEvents.push({ name: event.name, data: event.data });
+
+        // If handlers are already ready, process immediately
+        if (this.handlersReady) {
+          this.processColdStartEvent(event.name, event.data);
+        }
+      });
+    });
+
     // Answer call from native UI
     RNCallKeep.addEventListener('answerCall', ({ callUUID }: { callUUID: string }) => {
       console.log('[CallKeepService] Answer call:', callUUID);
       if (this.onAnswerCall) {
         this.onAnswerCall(callUUID);
+      } else {
+        // Queue if handler not ready yet
+        console.log('[CallKeepService] Queuing answerCall - handler not ready');
+        this.coldStartEvents.push({ name: 'RNCallKeepPerformAnswerCallAction', data: { callUUID } });
       }
     });
 
@@ -153,6 +187,10 @@ class CallKeepService {
       console.log('[CallKeepService] End call:', callUUID);
       if (this.onEndCall) {
         this.onEndCall(callUUID);
+      } else {
+        // Queue if handler not ready yet
+        console.log('[CallKeepService] Queuing endCall - handler not ready');
+        this.coldStartEvents.push({ name: 'RNCallKeepPerformEndCallAction', data: { callUUID } });
       }
       this.activeCallId = null;
     });
@@ -175,10 +213,22 @@ class CallKeepService {
       console.log('[CallKeepService] Hold call:', hold, callUUID);
     });
 
-    // Audio session activated (iOS)
+    // Audio session activated (iOS) - CRITICAL for WebRTC audio
     if (Platform.OS === 'ios') {
       RNCallKeep.addEventListener('didActivateAudioSession', () => {
-        console.log('[CallKeepService] Audio session activated');
+        console.log('[CallKeepService] Audio session activated by CallKit');
+        // Notify CallService that audio session is ready
+        // This is critical when useManualAudio = true in native code
+        if (this.onAudioSessionActivated) {
+          this.onAudioSessionActivated();
+        }
+      });
+
+      RNCallKeep.addEventListener('didDeactivateAudioSession', () => {
+        console.log('[CallKeepService] Audio session deactivated by CallKit');
+        if (this.onAudioSessionDeactivated) {
+          this.onAudioSessionDeactivated();
+        }
       });
     }
   }
@@ -353,6 +403,70 @@ class CallKeepService {
     return RNCallKeep !== null && this.initialized;
   }
 
+  // Process a cold start event
+  private processColdStartEvent(name: string, data: any): void {
+    console.log('[CallKeepService] Processing cold start event:', name);
+
+    switch (name) {
+      case 'RNCallKeepPerformAnswerCallAction':
+        if (this.onAnswerCall && data?.callUUID) {
+          console.log('[CallKeepService] Processing queued answerCall:', data.callUUID);
+          this.onAnswerCall(data.callUUID);
+        }
+        break;
+
+      case 'RNCallKeepPerformEndCallAction':
+        if (this.onEndCall && data?.callUUID) {
+          console.log('[CallKeepService] Processing queued endCall:', data.callUUID);
+          this.onEndCall(data.callUUID);
+        }
+        this.activeCallId = null;
+        break;
+
+      case 'RNCallKeepDidDisplayIncomingCall':
+        // Incoming call was displayed via native code (from VoIP push)
+        // This happens when app is cold-started by VoIP push
+        if (this.onColdStartIncomingCall && data?.callUUID) {
+          console.log('[CallKeepService] Processing cold start incoming call:', data.callUUID);
+          this.onColdStartIncomingCall(data.callUUID, data.payload || data);
+        }
+        break;
+
+      case 'RNCallKeepDidReceiveStartCallAction':
+        // User started an outgoing call from native UI (e.g., recent calls)
+        console.log('[CallKeepService] Start call action from native UI:', data);
+        break;
+
+      default:
+        console.log('[CallKeepService] Unhandled cold start event:', name);
+    }
+  }
+
+  // Mark handlers as ready and process any queued cold-start events
+  // Call this after setting up all event handlers (onAnswerCall, onEndCall, etc.)
+  markHandlersReady(): void {
+    console.log('[CallKeepService] Marking handlers ready, processing', this.coldStartEvents.length, 'queued events');
+    this.handlersReady = true;
+
+    // Process all queued events
+    const eventsToProcess = [...this.coldStartEvents];
+    this.coldStartEvents = [];
+
+    eventsToProcess.forEach(event => {
+      this.processColdStartEvent(event.name, event.data);
+    });
+  }
+
+  // Check if there are pending cold-start events
+  hasPendingColdStartEvents(): boolean {
+    return this.coldStartEvents.length > 0;
+  }
+
+  // Get pending cold-start events (for debugging)
+  getPendingColdStartEvents(): Array<{ name: string; data: any }> {
+    return [...this.coldStartEvents];
+  }
+
   // Remove all event listeners
   cleanup(): void {
     if (!RNCallKeep) return;
@@ -364,12 +478,18 @@ class CallKeepService {
       'didPerformSetMutedCallAction',
       'didPerformDTMFAction',
       'didToggleHoldCallAction',
+      'didLoadWithEvents',
     ];
 
-    // Add iOS-specific listener
+    // Add iOS-specific listeners
     if (Platform.OS === 'ios') {
       listeners.push('didActivateAudioSession');
+      listeners.push('didDeactivateAudioSession');
     }
+
+    // Reset cold-start state
+    this.coldStartEvents = [];
+    this.handlersReady = false;
 
     for (const listener of listeners) {
       try {

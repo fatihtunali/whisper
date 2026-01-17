@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sarjmobile.whisper",
-      "buildNumber": "39",
+      "buildNumber": "41",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Whisper needs camera access to scan QR codes when adding contacts and to enable video calls with your contacts.",
@@ -22,6 +22,7 @@
         "NSPhotoLibraryUsageDescription": "Whisper needs photo library access to let you share images in your conversations.",
         "UIBackgroundModes": [
           "voip",
+          "audio",
           "fetch",
           "remote-notification"
         ]
@@ -35,7 +36,7 @@
       "edgeToEdgeEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.sarjmobile.whisper",
-      "versionCode": 39,
+      "versionCode": 41,
       "googleServicesFile": "./android/google-services.json",
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
