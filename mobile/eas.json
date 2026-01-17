@@ -13,7 +13,7 @@
         "buildType": "apk"
       },
       "ios": {
-        "image": "macos-sequoia-xcode-26"
+        "image": "macos-sequoia-15.6-xcode-26.1"
       }
     },
     "production": {
@@ -21,7 +21,7 @@
         "buildType": "app-bundle"
       },
       "ios": {
-        "image": "macos-sequoia-xcode-26"
+        "image": "macos-sequoia-15.6-xcode-26.1"
       }
     }
   },
