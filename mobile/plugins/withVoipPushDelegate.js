@@ -100,7 +100,7 @@ ${callkeepImport}
   ]);
 }
 
-// Step 3: Configure Xcode project to use bridging header
+// Step 3: Configure Xcode project to use bridging header and signing
 function withVoipXcodeProject(config) {
   return withXcodeProject(config, (config) => {
     const projectName = getProjectName(config);
@@ -109,7 +109,7 @@ function withVoipXcodeProject(config) {
     const xcodeProject = config.modResults;
     const configurations = xcodeProject.pbxXCBuildConfigurationSection();
 
-    // Add bridging header to all configurations
+    // Add bridging header and signing to all configurations
     for (const key in configurations) {
       if (typeof configurations[key].buildSettings !== 'undefined') {
         const buildSettings = configurations[key].buildSettings;
@@ -118,10 +118,14 @@ function withVoipXcodeProject(config) {
         if (!buildSettings['SWIFT_OBJC_BRIDGING_HEADER']) {
           buildSettings['SWIFT_OBJC_BRIDGING_HEADER'] = `"${bridgingHeaderPath}"`;
         }
+
+        // Set development team and signing style for App Store distribution
+        buildSettings['DEVELOPMENT_TEAM'] = 'KX5N2U5RA2';
+        buildSettings['CODE_SIGN_STYLE'] = 'Automatic';
       }
     }
 
-    console.log('[withVoipPushDelegate] Xcode project configured with bridging header');
+    console.log('[withVoipPushDelegate] Xcode project configured with bridging header and signing');
     return config;
   });
 }
@@ -162,8 +166,10 @@ function modifySwiftAppDelegate(contents) {
     // Pattern for: return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     const superCallPattern = /(return\s+super\.application\s*\(\s*application\s*,\s*didFinishLaunchingWithOptions\s*:\s*launchOptions\s*\))/;
 
-    const initCode = `// VoIP Push Registration - must be called early for incoming call handling
-    RNVoipPushNotificationManager.voipRegistration()`;
+    const initCode = `// VoIP Push Registration - delay to ensure React Native bridge is ready
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+      RNVoipPushNotificationManager.voipRegistration()
+    }`;
 
     if (superCallPattern.test(contents)) {
       contents = contents.replace(
