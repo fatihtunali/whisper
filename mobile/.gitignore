@@ -43,3 +43,4 @@ yarn-error.*
 
 # Firebase service account key (sensitive - never commit)
 android/whisper-*.json
+google-services.json
