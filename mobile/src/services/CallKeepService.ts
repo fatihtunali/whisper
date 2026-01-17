@@ -110,6 +110,10 @@ class CallKeepService {
         return false;
       }
 
+      // CRITICAL: Register didLoadWithEvents BEFORE setup() to catch cold-start events
+      // This must be done before setup() according to react-native-callkeep docs
+      this.setupColdStartListener();
+
       const options: CallKeepOptions = {
         ios: {
           appName: 'Whisper',
@@ -148,88 +152,130 @@ class CallKeepService {
     }
   }
 
+  // Setup cold-start listener BEFORE setup() - this is critical for catching events
+  // that fired before JS was ready (e.g., user answered call from lock screen)
+  private setupColdStartListener(): void {
+    if (!RNCallKeep) return;
+
+    try {
+      RNCallKeep.addEventListener('didLoadWithEvents', (events: any[]) => {
+        console.log('[CallKeepService] didLoadWithEvents - received', events?.length || 0, 'events');
+        if (!events || events.length === 0) return;
+
+        events.forEach((event) => {
+          console.log('[CallKeepService] Cold start event:', event.name, event.data);
+
+          // Queue events for processing once handlers are ready
+          this.coldStartEvents.push({ name: event.name, data: event.data });
+
+          // If handlers are already ready, process immediately
+          if (this.handlersReady) {
+            this.processColdStartEvent(event.name, event.data);
+          }
+        });
+      });
+    } catch (error) {
+      console.warn('[CallKeepService] Failed to setup cold start listener:', error);
+    }
+  }
+
   private setupEventListeners(): void {
     if (!RNCallKeep) return;
 
-    // CRITICAL: Handle events that fired BEFORE JavaScript was ready
-    // This catches answerCall/endCall events from cold start (VoIP push woke app)
-    RNCallKeep.addEventListener('didLoadWithEvents', (events: any[]) => {
-      console.log('[CallKeepService] didLoadWithEvents - received', events?.length || 0, 'events');
-      if (!events || events.length === 0) return;
+    // NOTE: didLoadWithEvents is now registered in setupColdStartListener() BEFORE setup()
+    // This is required by react-native-callkeep to catch events from cold start
 
-      events.forEach((event) => {
-        console.log('[CallKeepService] Cold start event:', event.name, event.data);
+    // Wrap all event listener registrations in try/catch to prevent native exceptions
+    // from crashing the app (TurboModule exceptions are fatal if unhandled)
 
-        // Queue events for processing once handlers are ready
-        this.coldStartEvents.push({ name: event.name, data: event.data });
-
-        // If handlers are already ready, process immediately
-        if (this.handlersReady) {
-          this.processColdStartEvent(event.name, event.data);
+    try {
+      // Answer call from native UI
+      RNCallKeep.addEventListener('answerCall', ({ callUUID }: { callUUID: string }) => {
+        console.log('[CallKeepService] Answer call:', callUUID);
+        if (this.onAnswerCall) {
+          this.onAnswerCall(callUUID);
+        } else {
+          // Queue if handler not ready yet
+          console.log('[CallKeepService] Queuing answerCall - handler not ready');
+          this.coldStartEvents.push({ name: 'RNCallKeepPerformAnswerCallAction', data: { callUUID } });
         }
       });
-    });
+    } catch (error) {
+      console.warn('[CallKeepService] Failed to add answerCall listener:', error);
+    }
 
-    // Answer call from native UI
-    RNCallKeep.addEventListener('answerCall', ({ callUUID }: { callUUID: string }) => {
-      console.log('[CallKeepService] Answer call:', callUUID);
-      if (this.onAnswerCall) {
-        this.onAnswerCall(callUUID);
-      } else {
-        // Queue if handler not ready yet
-        console.log('[CallKeepService] Queuing answerCall - handler not ready');
-        this.coldStartEvents.push({ name: 'RNCallKeepPerformAnswerCallAction', data: { callUUID } });
-      }
-    });
+    try {
+      // End call from native UI
+      RNCallKeep.addEventListener('endCall', ({ callUUID }: { callUUID: string }) => {
+        console.log('[CallKeepService] End call:', callUUID);
+        if (this.onEndCall) {
+          this.onEndCall(callUUID);
+        } else {
+          // Queue if handler not ready yet
+          console.log('[CallKeepService] Queuing endCall - handler not ready');
+          this.coldStartEvents.push({ name: 'RNCallKeepPerformEndCallAction', data: { callUUID } });
+        }
+        this.activeCallId = null;
+      });
+    } catch (error) {
+      console.warn('[CallKeepService] Failed to add endCall listener:', error);
+    }
 
-    // End call from native UI
-    RNCallKeep.addEventListener('endCall', ({ callUUID }: { callUUID: string }) => {
-      console.log('[CallKeepService] End call:', callUUID);
-      if (this.onEndCall) {
-        this.onEndCall(callUUID);
-      } else {
-        // Queue if handler not ready yet
-        console.log('[CallKeepService] Queuing endCall - handler not ready');
-        this.coldStartEvents.push({ name: 'RNCallKeepPerformEndCallAction', data: { callUUID } });
-      }
-      this.activeCallId = null;
-    });
+    try {
+      // Mute toggle from native UI
+      RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted, callUUID }: { muted: boolean; callUUID: string }) => {
+        console.log('[CallKeepService] Mute call:', muted, callUUID);
+        if (this.onMuteCall) {
+          this.onMuteCall(muted, callUUID);
+        }
+      });
+    } catch (error) {
+      console.warn('[CallKeepService] Failed to add mute listener:', error);
+    }
 
-    // Mute toggle from native UI
-    RNCallKeep.addEventListener('didPerformSetMutedCallAction', ({ muted, callUUID }: { muted: boolean; callUUID: string }) => {
-      console.log('[CallKeepService] Mute call:', muted, callUUID);
-      if (this.onMuteCall) {
-        this.onMuteCall(muted, callUUID);
-      }
-    });
+    try {
+      // DTMF (dial tones)
+      RNCallKeep.addEventListener('didPerformDTMFAction', ({ digits, callUUID }: { digits: string; callUUID: string }) => {
+        console.log('[CallKeepService] DTMF:', digits, callUUID);
+      });
+    } catch (error) {
+      console.warn('[CallKeepService] Failed to add DTMF listener:', error);
+    }
 
-    // DTMF (dial tones)
-    RNCallKeep.addEventListener('didPerformDTMFAction', ({ digits, callUUID }: { digits: string; callUUID: string }) => {
-      console.log('[CallKeepService] DTMF:', digits, callUUID);
-    });
-
-    // Hold call
-    RNCallKeep.addEventListener('didToggleHoldCallAction', ({ hold, callUUID }: { hold: boolean; callUUID: string }) => {
-      console.log('[CallKeepService] Hold call:', hold, callUUID);
-    });
+    try {
+      // Hold call
+      RNCallKeep.addEventListener('didToggleHoldCallAction', ({ hold, callUUID }: { hold: boolean; callUUID: string }) => {
+        console.log('[CallKeepService] Hold call:', hold, callUUID);
+      });
+    } catch (error) {
+      console.warn('[CallKeepService] Failed to add hold listener:', error);
+    }
 
     // Audio session activated (iOS) - CRITICAL for WebRTC audio
     if (Platform.OS === 'ios') {
-      RNCallKeep.addEventListener('didActivateAudioSession', () => {
-        console.log('[CallKeepService] Audio session activated by CallKit');
-        // Notify CallService that audio session is ready
-        // This is critical when useManualAudio = true in native code
-        if (this.onAudioSessionActivated) {
-          this.onAudioSessionActivated();
-        }
-      });
+      try {
+        RNCallKeep.addEventListener('didActivateAudioSession', () => {
+          console.log('[CallKeepService] Audio session activated by CallKit');
+          // Notify CallService that audio session is ready
+          // This is critical when useManualAudio = true in native code
+          if (this.onAudioSessionActivated) {
+            this.onAudioSessionActivated();
+          }
+        });
+      } catch (error) {
+        console.warn('[CallKeepService] Failed to add audio activation listener:', error);
+      }
 
-      RNCallKeep.addEventListener('didDeactivateAudioSession', () => {
-        console.log('[CallKeepService] Audio session deactivated by CallKit');
-        if (this.onAudioSessionDeactivated) {
-          this.onAudioSessionDeactivated();
-        }
-      });
+      try {
+        RNCallKeep.addEventListener('didDeactivateAudioSession', () => {
+          console.log('[CallKeepService] Audio session deactivated by CallKit');
+          if (this.onAudioSessionDeactivated) {
+            this.onAudioSessionDeactivated();
+          }
+        });
+      } catch (error) {
+        console.warn('[CallKeepService] Failed to add audio deactivation listener:', error);
+      }
     }
   }
 
