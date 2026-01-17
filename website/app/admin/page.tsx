@@ -175,11 +175,12 @@ export default function AdminDashboard() {
               <form onSubmit={handleLogin}>
                 <input
                   type="password"
-                  placeholder="Admin API Key"
+                  placeholder="Admin Password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-indigo-500 mb-4"
                 />
+                <p className="text-xs text-gray-500 mb-4">Default: whisper-admin-key-change-in-production</p>
                 {error && <p className="text-red-500 text-sm mb-4">{error}</p>}
                 <button
                   type="submit"
