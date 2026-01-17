@@ -1,4 +1,5 @@
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LocalUser, Contact, Conversation, Message, Group, GroupConversation } from '../types';
 
 // Safe JSON parse helper - returns null on parse failure instead of crashing
@@ -81,13 +82,13 @@ class SecureStorage {
     await SecureStore.deleteItemAsync(KEYS.USER);
   }
 
-  // Contact methods
+  // Contact methods - using AsyncStorage for larger data
   async saveContacts(contacts: Contact[]): Promise<void> {
-    await SecureStore.setItemAsync(KEYS.CONTACTS, JSON.stringify(contacts));
+    await AsyncStorage.setItem(KEYS.CONTACTS, JSON.stringify(contacts));
   }
 
   async getContacts(): Promise<Contact[]> {
-    const data = await SecureStore.getItemAsync(KEYS.CONTACTS);
+    const data = await AsyncStorage.getItem(KEYS.CONTACTS);
     if (!data) return [];
     return safeJsonParse<Contact[]>(data, []) || [];
   }
@@ -121,13 +122,13 @@ class SecureStorage {
     return contacts.find(c => c.whisperId === whisperId) || null;
   }
 
-  // Conversation methods
+  // Conversation methods - using AsyncStorage for larger data
   async saveConversations(conversations: Conversation[]): Promise<void> {
-    await SecureStore.setItemAsync(KEYS.CONVERSATIONS, JSON.stringify(conversations));
+    await AsyncStorage.setItem(KEYS.CONVERSATIONS, JSON.stringify(conversations));
   }
 
   async getConversations(): Promise<Conversation[]> {
-    const data = await SecureStore.getItemAsync(KEYS.CONVERSATIONS);
+    const data = await AsyncStorage.getItem(KEYS.CONVERSATIONS);
     if (!data) return [];
     return safeJsonParse<Conversation[]>(data, []) || [];
   }
@@ -179,19 +180,19 @@ class SecureStorage {
     const filtered = conversations.filter(c => c.contactId !== contactId);
     await this.saveConversations(filtered);
     // Also delete messages
-    await SecureStore.deleteItemAsync(KEYS.MESSAGES_PREFIX + contactId);
+    await AsyncStorage.removeItem(KEYS.MESSAGES_PREFIX + contactId);
   }
 
-  // Message methods
+  // Message methods - using AsyncStorage for larger data
   async saveMessages(conversationId: string, messages: Message[]): Promise<void> {
-    await SecureStore.setItemAsync(
+    await AsyncStorage.setItem(
       KEYS.MESSAGES_PREFIX + conversationId,
       JSON.stringify(messages)
     );
   }
 
   async getMessages(conversationId: string): Promise<Message[]> {
-    const data = await SecureStore.getItemAsync(KEYS.MESSAGES_PREFIX + conversationId);
+    const data = await AsyncStorage.getItem(KEYS.MESSAGES_PREFIX + conversationId);
     if (!data) return [];
     return safeJsonParse<Message[]>(data, []) || [];
   }
@@ -291,9 +292,9 @@ class SecureStorage {
     }
   }
 
-  // Privacy settings methods
+  // Privacy settings methods - using AsyncStorage
   async getPrivacySettings(): Promise<PrivacySettings> {
-    const data = await SecureStore.getItemAsync(KEYS.PRIVACY_SETTINGS);
+    const data = await AsyncStorage.getItem(KEYS.PRIVACY_SETTINGS);
     if (!data) {
       // Default all to true
       return { readReceipts: true, typingIndicator: true, showOnlineStatus: true };
@@ -310,7 +311,7 @@ class SecureStorage {
   }
 
   async setPrivacySettings(settings: PrivacySettings): Promise<void> {
-    await SecureStore.setItemAsync(KEYS.PRIVACY_SETTINGS, JSON.stringify(settings));
+    await AsyncStorage.setItem(KEYS.PRIVACY_SETTINGS, JSON.stringify(settings));
   }
 
   // App lock settings methods
@@ -326,9 +327,9 @@ class SecureStorage {
     await SecureStore.setItemAsync(KEYS.APP_LOCK_SETTINGS, JSON.stringify(settings));
   }
 
-  // Notification settings methods
+  // Notification settings methods - using AsyncStorage
   async getNotificationSettings(): Promise<NotificationSettings> {
-    const data = await SecureStore.getItemAsync(KEYS.NOTIFICATION_SETTINGS);
+    const data = await AsyncStorage.getItem(KEYS.NOTIFICATION_SETTINGS);
     if (!data) {
       // Default settings
       return {
@@ -349,7 +350,7 @@ class SecureStorage {
   }
 
   async setNotificationSettings(settings: NotificationSettings): Promise<void> {
-    await SecureStore.setItemAsync(KEYS.NOTIFICATION_SETTINGS, JSON.stringify(settings));
+    await AsyncStorage.setItem(KEYS.NOTIFICATION_SETTINGS, JSON.stringify(settings));
   }
 
   async clearAppLockSettings(): Promise<void> {
@@ -398,16 +399,16 @@ class SecureStorage {
 
   // ============ GROUP METHODS ============
 
-  // Get all groups
+  // Get all groups - using AsyncStorage for larger data
   async getGroups(): Promise<Group[]> {
-    const data = await SecureStore.getItemAsync(KEYS.GROUPS);
+    const data = await AsyncStorage.getItem(KEYS.GROUPS);
     if (!data) return [];
     return safeJsonParse<Group[]>(data, []) || [];
   }
 
   // Save all groups
   async saveGroups(groups: Group[]): Promise<void> {
-    await SecureStore.setItemAsync(KEYS.GROUPS, JSON.stringify(groups));
+    await AsyncStorage.setItem(KEYS.GROUPS, JSON.stringify(groups));
   }
 
   // Get a single group by ID
@@ -449,16 +450,16 @@ class SecureStorage {
 
   // ============ GROUP CONVERSATION METHODS ============
 
-  // Get all group conversations
+  // Get all group conversations - using AsyncStorage for larger data
   async getGroupConversations(): Promise<GroupConversation[]> {
-    const data = await SecureStore.getItemAsync(KEYS.GROUP_CONVERSATIONS);
+    const data = await AsyncStorage.getItem(KEYS.GROUP_CONVERSATIONS);
     if (!data) return [];
     return safeJsonParse<GroupConversation[]>(data, []) || [];
   }
 
   // Save all group conversations
   async saveGroupConversations(conversations: GroupConversation[]): Promise<void> {
-    await SecureStore.setItemAsync(KEYS.GROUP_CONVERSATIONS, JSON.stringify(conversations));
+    await AsyncStorage.setItem(KEYS.GROUP_CONVERSATIONS, JSON.stringify(conversations));
   }
 
   // Get or create a group conversation
@@ -511,21 +512,21 @@ class SecureStorage {
     const filtered = conversations.filter(c => c.groupId !== groupId);
     await this.saveGroupConversations(filtered);
     // Also delete group messages
-    await SecureStore.deleteItemAsync(KEYS.GROUP_MESSAGES_PREFIX + groupId);
+    await AsyncStorage.removeItem(KEYS.GROUP_MESSAGES_PREFIX + groupId);
   }
 
   // ============ GROUP MESSAGE METHODS ============
 
-  // Get messages for a group
+  // Get messages for a group - using AsyncStorage for larger data
   async getGroupMessages(groupId: string): Promise<Message[]> {
-    const data = await SecureStore.getItemAsync(KEYS.GROUP_MESSAGES_PREFIX + groupId);
+    const data = await AsyncStorage.getItem(KEYS.GROUP_MESSAGES_PREFIX + groupId);
     if (!data) return [];
     return safeJsonParse<Message[]>(data, []) || [];
   }
 
   // Save messages for a group
   async saveGroupMessages(groupId: string, messages: Message[]): Promise<void> {
-    await SecureStore.setItemAsync(
+    await AsyncStorage.setItem(
       KEYS.GROUP_MESSAGES_PREFIX + groupId,
       JSON.stringify(messages)
     );
@@ -579,24 +580,26 @@ class SecureStorage {
     const conversations = await this.getConversations();
     const groups = await this.getGroups();
 
-    // Delete main data stores
+    // Delete SecureStore data (user credentials only)
     await SecureStore.deleteItemAsync(KEYS.USER);
-    await SecureStore.deleteItemAsync(KEYS.CONTACTS);
-    await SecureStore.deleteItemAsync(KEYS.CONVERSATIONS);
-    await SecureStore.deleteItemAsync(KEYS.PRIVACY_SETTINGS);
     await SecureStore.deleteItemAsync(KEYS.APP_LOCK_SETTINGS);
-    await SecureStore.deleteItemAsync(KEYS.NOTIFICATION_SETTINGS);
-    await SecureStore.deleteItemAsync(KEYS.GROUPS);
-    await SecureStore.deleteItemAsync(KEYS.GROUP_CONVERSATIONS);
+
+    // Delete AsyncStorage data
+    await AsyncStorage.removeItem(KEYS.CONTACTS);
+    await AsyncStorage.removeItem(KEYS.CONVERSATIONS);
+    await AsyncStorage.removeItem(KEYS.PRIVACY_SETTINGS);
+    await AsyncStorage.removeItem(KEYS.NOTIFICATION_SETTINGS);
+    await AsyncStorage.removeItem(KEYS.GROUPS);
+    await AsyncStorage.removeItem(KEYS.GROUP_CONVERSATIONS);
 
     // Delete individual message stores
     for (const conv of conversations) {
-      await SecureStore.deleteItemAsync(KEYS.MESSAGES_PREFIX + conv.id);
+      await AsyncStorage.removeItem(KEYS.MESSAGES_PREFIX + conv.id);
     }
 
     // Delete group message stores
     for (const group of groups) {
-      await SecureStore.deleteItemAsync(KEYS.GROUP_MESSAGES_PREFIX + group.id);
+      await AsyncStorage.removeItem(KEYS.GROUP_MESSAGES_PREFIX + group.id);
     }
   }
 }
