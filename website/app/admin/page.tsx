@@ -39,7 +39,7 @@ export default function AdminDashboard() {
   const [apiKey, setApiKey] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || 'https://sarjmobile.com:3031';
+  const SERVER_URL = process.env.NEXT_PUBLIC_SERVER_URL || '/api/whisper';
 
   const fetchStats = async () => {
     try {
