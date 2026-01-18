@@ -124,7 +124,12 @@ class CallService {
   // iOS CallKit audio session state
   // On iOS, we MUST wait for CallKit to activate the audio session before starting audio
   private isAudioSessionActivated: boolean = false;
-  private pendingAudioStart: { isVideo: boolean } | null = null;
+  private pendingAudioStart: { isVideo: boolean; needsAudioCapture: boolean } | null = null;
+
+  // Audio state tracking for idempotency - prevents double-start/stop issues
+  // iOS CallKit can send duplicate events, so we need to track actual state
+  private audioState: 'idle' | 'starting' | 'started' | 'stopping' = 'idle';
+  private audioStartedForCallId: string | null = null;
 
   constructor() {
     // Set up signaling message handlers
@@ -146,9 +151,9 @@ class CallService {
 
       // If we have a pending audio start, do it now
       if (this.pendingAudioStart) {
-        const { isVideo } = this.pendingAudioStart;
+        const { isVideo, needsAudioCapture } = this.pendingAudioStart;
         this.pendingAudioStart = null;
-        await this.startAudioSessionNow(isVideo);
+        await this.startAudioSessionNow(isVideo, needsAudioCapture);
       }
     };
 
@@ -166,7 +171,23 @@ class CallService {
   }
 
   // Actually start the audio session (called when CallKit says it's ready on iOS, or immediately on Android)
-  private async startAudioSessionNow(isVideo: boolean): Promise<void> {
+  // On iOS, this also captures audio and adds it to peer connection since we delay audio capture
+  private async startAudioSessionNow(isVideo: boolean, needsAudioCapture: boolean = false): Promise<void> {
+    // Idempotency check - prevent double-start
+    const currentCallId = this.currentSession?.callId || null;
+    if (this.audioState === 'started' && this.audioStartedForCallId === currentCallId) {
+      console.log('[CallService] Audio already started for this call, skipping duplicate start');
+      return;
+    }
+    if (this.audioState === 'starting') {
+      console.log('[CallService] Audio start already in progress, skipping');
+      return;
+    }
+
+    this.audioState = 'starting';
+    console.log('[CallService] startAudioSessionNow - isVideo:', isVideo, 'needsAudioCapture:', needsAudioCapture);
+
+    // Start InCallManager first
     const manager = await loadInCallManager();
     if (manager) {
       try {
@@ -177,15 +198,75 @@ class CallService {
         });
         manager.setSpeakerphoneOn(isVideo);
         manager.setKeepScreenOn(true);
-        console.log('[CallService] Audio session started for', isVideo ? 'video' : 'audio');
+        console.log('[CallService] InCallManager started for', isVideo ? 'video' : 'audio');
       } catch (e) {
-        console.warn('[CallService] Failed to start audio session:', e);
+        console.warn('[CallService] Failed to start InCallManager:', e);
       }
     }
+
+    // iOS: Now capture audio and add to peer connection
+    // This was delayed until CallKit activated the audio session
+    if (needsAudioCapture && Platform.OS === 'ios') {
+      try {
+        console.log('[CallService] iOS: Capturing audio now that CallKit activated session');
+        const { mediaDevices } = await import('react-native-webrtc');
+
+        // Capture audio only
+        const audioStream = await mediaDevices.getUserMedia({ audio: true, video: false });
+        const audioTrack = (audioStream as any).getAudioTracks()[0];
+
+        if (audioTrack && this.peerConnection) {
+          // Find the audio transceiver we created earlier and replace its track
+          // This avoids renegotiation since the m-line already exists in SDP
+          const transceivers = (this.peerConnection as any).getTransceivers?.();
+          let audioTransceiver = transceivers?.find((t: any) =>
+            t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio' ||
+            (t.mid && t.receiver?.track === null && t.sender?.track === null)
+          );
+
+          if (audioTransceiver && audioTransceiver.sender) {
+            // Replace track on existing transceiver - no renegotiation needed
+            await audioTransceiver.sender.replaceTrack(audioTrack);
+            console.log('[CallService] iOS: Audio track replaced on existing transceiver');
+          } else {
+            // Fallback: add track directly (may trigger renegotiation)
+            console.log('[CallService] iOS: No audio transceiver found, using addTrack');
+            this.peerConnection.addTrack(audioTrack, audioStream as any);
+          }
+
+          console.log('[CallService] iOS: Audio track added to peer connection');
+
+          // Store reference to audio track in local stream
+          if (this.localStream) {
+            (this.localStream as any).addTrack(audioTrack);
+          } else {
+            this.localStream = audioStream as unknown as MediaStream;
+          }
+        } else {
+          console.warn('[CallService] iOS: Could not add audio track - audioTrack:', !!audioTrack, 'peerConnection:', !!this.peerConnection);
+        }
+      } catch (e) {
+        console.error('[CallService] iOS: Failed to capture audio:', e);
+      }
+    }
+
+    // Mark audio as started for this call
+    this.audioState = 'started';
+    this.audioStartedForCallId = this.currentSession?.callId || null;
+    console.log('[CallService] Audio state set to started for callId:', this.audioStartedForCallId);
   }
 
   // Stop the audio session
   private async stopAudioSession(): Promise<void> {
+    // Idempotency check - prevent double-stop
+    if (this.audioState === 'idle' || this.audioState === 'stopping') {
+      console.log('[CallService] Audio already stopped/stopping, skipping duplicate stop');
+      return;
+    }
+
+    this.audioState = 'stopping';
+    console.log('[CallService] Stopping audio session...');
+
     const manager = await loadInCallManager();
     if (manager) {
       try {
@@ -195,21 +276,26 @@ class CallService {
         console.warn('[CallService] Failed to stop audio session:', e);
       }
     }
+
+    this.audioState = 'idle';
+    this.audioStartedForCallId = null;
   }
 
   // Request audio session start - on iOS waits for CallKit, on Android starts immediately
-  private async requestAudioSessionStart(isVideo: boolean, withRingback: boolean = false): Promise<void> {
+  // needsAudioCapture: if true, audio will be captured when CallKit activates (delayed capture for iOS)
+  private async requestAudioSessionStart(isVideo: boolean, withRingback: boolean = false, needsAudioCapture: boolean = false): Promise<void> {
     if (Platform.OS === 'ios') {
       // iOS: Don't start audio directly, wait for CallKit to activate the session
       // Store pending request so we can start when activated
-      console.log('[CallService] iOS: Audio session start requested, waiting for CallKit activation');
-      this.pendingAudioStart = { isVideo };
+      // needsAudioCapture tells us to also capture audio when session activates
+      console.log('[CallService] iOS: Audio session start requested, waiting for CallKit activation. needsAudioCapture:', needsAudioCapture);
+      this.pendingAudioStart = { isVideo, needsAudioCapture };
 
       // If already activated (shouldn't happen but handle gracefully)
       if (this.isAudioSessionActivated) {
         console.log('[CallService] iOS: Audio session already activated, starting now');
         this.pendingAudioStart = null;
-        await this.startAudioSessionNow(isVideo);
+        await this.startAudioSessionNow(isVideo, needsAudioCapture);
       }
     } else {
       // Android: Start audio immediately, no CallKit coordination needed
@@ -414,14 +500,22 @@ class CallService {
   }
 
   // Initialize media stream (audio + optional video)
+  // Initialize media for call
+  // On iOS: We MUST NOT capture audio until CallKit activates the audio session
+  // So on iOS, we only capture video here. Audio is captured later in startAudioSessionNow.
+  // On Android: We capture both audio and video immediately.
   async initializeMedia(isVideo: boolean): Promise<MediaStream> {
     try {
       // Dynamically import react-native-webrtc
       const { mediaDevices } = await import('react-native-webrtc');
 
+      // iOS: Don't capture audio here - wait for CallKit to activate audio session
+      // Audio will be captured in startAudioSessionNow() after didActivateAudioSession
+      const captureAudio = Platform.OS !== 'ios';
+
       // Request media with constraints
       const constraints = {
-        audio: true,
+        audio: captureAudio, // false on iOS, true on Android
         video: isVideo ? {
           facingMode: 'user',
           width: { ideal: 1280 },
@@ -429,10 +523,21 @@ class CallService {
         } : false,
       };
 
+      console.log('[CallService] initializeMedia constraints:', JSON.stringify(constraints));
+
+      // If iOS and audio-only call, we might not need to capture anything here
+      // Just create an empty stream and add audio later
+      if (Platform.OS === 'ios' && !isVideo) {
+        console.log('[CallService] iOS audio-only call: skipping media capture, will capture audio after CallKit activation');
+        // Create a placeholder - audio will be added after CallKit activates
+        this.localStream = null as any;
+        return this.localStream;
+      }
+
       // Use react-native-webrtc's mediaDevices
       const stream = await mediaDevices.getUserMedia(constraints);
       this.localStream = stream as unknown as MediaStream;
-      console.log('[CallService] Local media stream initialized');
+      console.log('[CallService] Local media stream initialized (audio:', captureAudio, ', video:', isVideo, ')');
       return this.localStream;
     } catch (error) {
       console.error('[CallService] Failed to get user media:', error);
@@ -503,6 +608,7 @@ class CallService {
     }
 
     const callId = generateId();
+    const callerName = contact.nickname || contact.username || contact.whisperId;
 
     // Create session - video calls default to speaker ON
     this.currentSession = {
@@ -517,10 +623,20 @@ class CallService {
       isFrontCamera: true,
     };
 
+    // iOS: CRITICAL - Tell CallKit about the outgoing call FIRST
+    // CallKit will then activate the audio session and call didActivateAudioSession
+    // We MUST NOT start audio until CallKit says it's ready
+    if (Platform.OS === 'ios') {
+      console.log('[CallService] iOS: Registering outgoing call with CallKit');
+      await callKeepService.startCall(callId, callerName, contact.whisperId, isVideo);
+    }
+
     // Request audio session start
     // iOS: This queues the request - actual start happens when CallKit activates audio session
+    // iOS also needs to capture audio after activation since we skip it in initializeMedia
     // Android: This starts immediately
-    await this.requestAudioSessionStart(isVideo, true); // withRingback=true for outgoing calls
+    const needsAudioCapture = Platform.OS === 'ios'; // iOS needs delayed audio capture
+    await this.requestAudioSessionStart(isVideo, true, needsAudioCapture); // withRingback=true for outgoing calls
 
     // Set up headphone button listeners
     this.setupAudioEventListeners();
@@ -602,10 +718,12 @@ class CallService {
 
     // Request audio session start
     // iOS: This queues the request - actual start happens when CallKit activates audio session
+    // iOS also needs to capture audio after activation since we skip it in initializeMedia
     // Android: This starts immediately
     // Note: For incoming calls on iOS, CallKit may have already activated the session
     // when the user answered via the native UI, so this might start immediately
-    await this.requestAudioSessionStart(isVideo, false); // withRingback=false for incoming calls
+    const needsAudioCapture = Platform.OS === 'ios'; // iOS needs delayed audio capture
+    await this.requestAudioSessionStart(isVideo, false, needsAudioCapture); // withRingback=false for incoming calls
 
     // Set up headphone button listeners
     this.setupAudioEventListeners();
@@ -980,6 +1098,20 @@ class CallService {
 
       this.peerConnection = peerConnection as unknown as RTCPeerConnection;
 
+      // iOS: Add audio transceiver upfront to ensure SDP has audio m-line
+      // This prevents renegotiation when we add audio track later after CallKit activates
+      // The transceiver starts with no track, but the m-line is in the SDP
+      if (Platform.OS === 'ios') {
+        try {
+          console.log('[CallService] iOS: Adding audio transceiver for SDP m-line');
+          (this.peerConnection as any).addTransceiver('audio', { direction: 'sendrecv' });
+          console.log('[CallService] iOS: Audio transceiver added');
+        } catch (e) {
+          console.warn('[CallService] iOS: Failed to add audio transceiver:', e);
+          // Continue anyway - might work without it
+        }
+      }
+
     // Handle ICE candidates - wrapped in try-catch to prevent native crashes
     (this.peerConnection as any).onicecandidate = (event: any) => {
       try {
@@ -1041,6 +1173,13 @@ class CallService {
           if (this.currentSession && !this.isCleaningUp) {
             this.currentSession.state = 'connected';
             this.currentSession.startTime = Date.now();
+
+            // iOS: Tell CallKit the call is now active/connected
+            if (Platform.OS === 'ios') {
+              console.log('[CallService] iOS: Reporting call connected to CallKit');
+              callKeepService.reportCallConnected(this.currentSession.callId);
+            }
+
             this.notifyStateChange('connected');
           }
         } else if (state === 'disconnected' || state === 'failed') {
@@ -1464,6 +1603,8 @@ class CallService {
 
       // Reset audio session state
       this.pendingAudioStart = null;
+      this.audioState = 'idle';
+      this.audioStartedForCallId = null;
       // Note: isAudioSessionActivated is managed by CallKit callbacks on iOS
       // On Android, we reset it here
       if (Platform.OS !== 'ios') {
@@ -1647,6 +1788,8 @@ class CallService {
 
       // Reset audio session state
       this.pendingAudioStart = null;
+      this.audioState = 'idle';
+      this.audioStartedForCallId = null;
       if (Platform.OS !== 'ios') {
         this.isAudioSessionActivated = false;
       }
