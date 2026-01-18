@@ -6,6 +6,13 @@
  */
 
 import { Platform } from 'react-native';
+import { generateUUID } from '../utils/helpers';
+
+// Check if string is valid UUID format
+function isValidUUID(str: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+}
 
 let notifee: any = null;
 let notifeeAvailable: boolean | null = null;
@@ -175,6 +182,12 @@ class AndroidCallNotificationService {
     isVideo: boolean = false
   ): Promise<boolean> {
     if (Platform.OS !== 'android') return false;
+
+    // Validate callId is proper UUID format for consistency
+    if (!callId || typeof callId !== 'string' || !isValidUUID(callId)) {
+      console.warn('[AndroidCallNotification] Invalid callId, generating fallback UUID');
+      callId = generateUUID();
+    }
 
     const noti = await loadNotifee();
     if (!noti) {

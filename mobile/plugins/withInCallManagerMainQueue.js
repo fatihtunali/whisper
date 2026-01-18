@@ -20,6 +20,7 @@ function withInCallManagerMainQueue(config) {
 
       // Find InCallManager in node_modules
       const possiblePaths = [
+        path.join(projectRoot, 'node_modules', 'react-native-incall-manager', 'ios', 'RNInCallManager', 'RNInCallManager.m'),
         path.join(projectRoot, 'node_modules', 'react-native-incall-manager', 'ios', 'InCallManager.m'),
         path.join(projectRoot, 'node_modules', 'react-native-incall-manager', 'ios', 'RNInCallManager.m'),
         path.join(projectRoot, 'node_modules', 'react-native-incall-manager', 'ios', 'InCallManager', 'InCallManager.m'),

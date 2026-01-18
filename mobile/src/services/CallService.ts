@@ -1,8 +1,14 @@
 import { Platform } from 'react-native';
 import { CallSession, CallState, Contact } from '../types';
-import { generateId } from '../utils/helpers';
+import { generateId, generateUUID } from '../utils/helpers';
 import { messagingService } from './MessagingService';
 import { callKeepService } from './CallKeepService';
+
+// Check if string is valid UUID format (required for iOS CallKit)
+const isValidUUID = (str: string): boolean => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+};
 
 // InCallManager for audio routing (speaker, proximity sensor, etc.)
 let InCallManager: any = null;
@@ -1043,7 +1049,9 @@ class CallService {
       throw new Error('Call already in progress');
     }
 
-    const callId = generateId();
+    // Generate proper UUID format for iOS CallKit compatibility
+    const callId = generateUUID();
+    console.log('[CallService] Starting call with callId:', callId, 'video:', isVideo);
     const callerName = contact.nickname || contact.username || contact.whisperId;
 
     // Create session - video calls default to speaker ON
@@ -1777,6 +1785,12 @@ class CallService {
       console.log('[CallService] handleWebSocketMessage:', type);
       switch (type) {
         case 'incoming_call':
+          // Validate callId is proper UUID format - iOS CallKit crashes if invalid
+          if (!payload.callId || typeof payload.callId !== 'string' || !isValidUUID(payload.callId)) {
+            console.warn('[CallService] incoming_call has invalid callId format, generating proper UUID');
+            payload.callId = generateUUID();
+          }
+          console.log('[CallService] incoming_call - callId:', payload.callId, 'from:', payload.fromWhisperId);
           // Map to internal format and handle
           await this.handleSignalingMessage(payload.fromWhisperId, {
             type: 'call_offer',

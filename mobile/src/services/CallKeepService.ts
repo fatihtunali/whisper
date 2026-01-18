@@ -10,6 +10,13 @@
  */
 
 import { Platform } from 'react-native';
+import { generateUUID } from '../utils/helpers';
+
+// Check if string is valid UUID format (required for iOS CallKit)
+const isValidUUID = (str: string): boolean => {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+};
 
 // CallKeep types
 interface CallKeepOptions {
@@ -286,6 +293,13 @@ class CallKeepService {
     callerNumber: string,
     isVideo: boolean = false
   ): Promise<void> {
+    // CRITICAL: iOS CallKit crashes if UUID is nil or invalid format
+    // Validate UUID format and generate proper fallback if needed
+    if (!callId || typeof callId !== 'string' || !isValidUUID(callId)) {
+      console.error('[CallKeepService] Invalid callId format received:', callId, '- generating proper UUID');
+      callId = generateUUID();
+    }
+
     if (!this.initialized) {
       await this.initialize();
     }
@@ -301,6 +315,8 @@ class CallKeepService {
       // Format caller display
       const displayName = callerName || callerNumber.substring(0, 16) + '...';
 
+      console.log('[CallKeepService] Calling displayIncomingCall - callId:', callId, 'display:', displayName);
+
       RNCallKeep.displayIncomingCall(
         callId,
         callerNumber,
@@ -309,7 +325,7 @@ class CallKeepService {
         isVideo
       );
 
-      console.log('[CallKeepService] Displaying incoming call:', callId, displayName);
+      console.log('[CallKeepService] displayIncomingCall completed successfully');
     } catch (error) {
       console.error('[CallKeepService] Failed to display incoming call:', error);
     }
@@ -322,6 +338,12 @@ class CallKeepService {
     calleeNumber: string,
     isVideo: boolean = false
   ): Promise<void> {
+    // CRITICAL: iOS CallKit crashes if UUID is nil or invalid format
+    if (!callId || typeof callId !== 'string' || !isValidUUID(callId)) {
+      console.error('[CallKeepService] Invalid callId format for outgoing call:', callId, '- generating proper UUID');
+      callId = generateUUID();
+    }
+
     if (!this.initialized) {
       await this.initialize();
     }
@@ -331,6 +353,8 @@ class CallKeepService {
     try {
       this.activeCallId = callId;
 
+      console.log('[CallKeepService] Starting outgoing call - callId:', callId, 'video:', isVideo);
+
       RNCallKeep.startCall(
         callId,
         calleeNumber,
@@ -339,7 +363,7 @@ class CallKeepService {
         isVideo
       );
 
-      console.log('[CallKeepService] Started outgoing call:', callId);
+      console.log('[CallKeepService] Started outgoing call successfully');
     } catch (error) {
       console.error('[CallKeepService] Failed to start call:', error);
     }
@@ -348,6 +372,10 @@ class CallKeepService {
   // Report call connected
   reportCallConnected(callId: string): void {
     if (!RNCallKeep) return;
+    if (!callId || typeof callId !== 'string') {
+      console.error('[CallKeepService] Invalid callId in reportCallConnected');
+      return;
+    }
 
     try {
       RNCallKeep.setCurrentCallActive(callId);
@@ -376,6 +404,10 @@ class CallKeepService {
   // Report call ended with reason
   reportEndCallWithReason(callId: string, reason: number): void {
     if (!RNCallKeep) return;
+    if (!callId || typeof callId !== 'string') {
+      console.error('[CallKeepService] Invalid callId in reportEndCallWithReason');
+      return;
+    }
 
     try {
       RNCallKeep.reportEndCallWithUUID(callId, reason);

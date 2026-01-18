@@ -6,6 +6,7 @@ import { voipPushService } from './VoIPPushService';
 import { messagingService } from './MessagingService';
 import { registerBackgroundNotificationTask } from './BackgroundNotificationHandler';
 import { androidCallNotificationService } from './AndroidCallNotificationService';
+import { generateUUID } from '../utils/helpers';
 
 // NOTE: setNotificationHandler is now called inside initialize() to prevent iOS crashes
 // Calling it at module load time can crash the app before native modules are ready
@@ -166,7 +167,13 @@ class NotificationService {
   private handleVoIPPush(notification: any): void {
     console.log('[NotificationService] Handling VoIP push:', notification);
 
-    const { callId, fromWhisperId, callerName, isVideo } = notification;
+    let { callId, fromWhisperId, callerName, isVideo } = notification;
+
+    // Validate callId is proper UUID format for iOS CallKit
+    if (!callId || typeof callId !== 'string' || !this.isValidUUID(callId)) {
+      console.warn('[NotificationService] Invalid callId in VoIP push, generating fallback UUID');
+      callId = generateUUID();
+    }
 
     if (callId && fromWhisperId) {
       // NOTE: We do NOT call displayIncomingCall here because:
@@ -177,13 +184,19 @@ class NotificationService {
       // The native code uses the same callId from the payload, so when CallKeep events
       // fire (answerCall, endCall), they will have the correct callId that matches our JS state.
 
-      console.log('[NotificationService] VoIP push processed - CallKit UI already shown by native code');
+      console.log('[NotificationService] VoIP push processed - callId:', callId);
 
       // Just notify app about incoming call so it can set up the call state
       if (this.onIncomingCall) {
         this.onIncomingCall(callId, fromWhisperId, isVideo || false, callerName || 'Unknown');
       }
     }
+  }
+
+  // Check if string is valid UUID format
+  private isValidUUID(str: string): boolean {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    return uuidRegex.test(str);
   }
 
   // Get VoIP token (iOS only)

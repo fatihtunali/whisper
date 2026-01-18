@@ -13,8 +13,15 @@
 import * as TaskManager from 'expo-task-manager';
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import { generateUUID } from '../utils/helpers';
 
 export const BACKGROUND_NOTIFICATION_TASK = 'BACKGROUND-NOTIFICATION-TASK';
+
+// Check if string is valid UUID format
+function isValidUUID(str: string): boolean {
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(str);
+}
 
 // Helper function to display Android call notification using notifee
 async function displayAndroidCallNotification(
@@ -126,14 +133,20 @@ try {
 
   // Handle incoming call notifications
   if (notificationData.type === 'incoming_call') {
-    const { callId, fromWhisperId, callerName, isVideo } = notificationData as {
+    let { callId, fromWhisperId, callerName, isVideo } = notificationData as {
       callId: string;
       fromWhisperId: string;
       callerName: string;
       isVideo: boolean;
     };
 
-    console.log('[BackgroundNotification] Incoming call from:', fromWhisperId);
+    // Validate callId is proper UUID format
+    if (!callId || typeof callId !== 'string' || !isValidUUID(callId)) {
+      console.warn('[BackgroundNotification] Invalid callId, generating fallback UUID');
+      callId = generateUUID();
+    }
+
+    console.log('[BackgroundNotification] Incoming call from:', fromWhisperId, 'callId:', callId);
 
     // On Android, display full-screen call notification
     if (Platform.OS === 'android') {

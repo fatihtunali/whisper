@@ -5,13 +5,18 @@ import Link from 'next/link';
 
 interface ServerStats {
   uptime: number;
-  connections: number;
-  messagesRouted: number;
-  pendingMessages: number;
-  redis: {
-    connected: boolean;
-    memory: string;
+  activeConnections: number;
+  registeredUsers: number;
+  pendingMessages: {
+    users: number;
+    messages: number;
   };
+  redis: {
+    enabled: boolean;
+    connectedClients: number;
+    usedMemory: string;
+  };
+  timestamp: string;
 }
 
 interface Report {
@@ -195,7 +200,7 @@ export default function AdminDashboard() {
         )}
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Server Uptime</div>
             <div className="text-2xl font-semibold">
@@ -205,23 +210,32 @@ export default function AdminDashboard() {
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Active Connections</div>
             <div className="text-2xl font-semibold text-green-500">
-              {stats?.connections ?? '—'}
+              {stats?.activeConnections ?? '—'}
             </div>
           </div>
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
-            <div className="text-gray-400 text-sm mb-1">Messages Routed</div>
+            <div className="text-gray-400 text-sm mb-1">Registered Users</div>
             <div className="text-2xl font-semibold">
-              {stats?.messagesRouted?.toLocaleString() ?? '—'}
+              {stats?.registeredUsers?.toLocaleString() ?? '—'}
             </div>
           </div>
           <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <div className="text-gray-400 text-sm mb-1">Redis Status</div>
             <div className="text-2xl font-semibold">
-              {stats?.redis?.connected ? (
-                <span className="text-green-500">Connected</span>
+              {stats?.redis?.enabled ? (
+                <span className="text-green-500">Connected ({stats.redis.usedMemory})</span>
               ) : (
                 <span className="text-red-500">Disconnected</span>
               )}
+            </div>
+          </div>
+          <div className="bg-gray-900 rounded-xl p-6 border border-gray-800">
+            <div className="text-gray-400 text-sm mb-1">Pending Messages</div>
+            <div className="text-2xl font-semibold text-yellow-500">
+              {stats?.pendingMessages?.messages ?? '—'}
+            </div>
+            <div className="text-xs text-gray-500 mt-1">
+              {stats?.pendingMessages?.users ?? 0} users waiting
             </div>
           </div>
         </div>
