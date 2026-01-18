@@ -357,42 +357,87 @@ class CallService {
 
       console.log('[CallService] iOS PATH A: Audio captured, finding sender for replaceTrack...');
 
-      // Find the audio sender - try getSenders first, then transceivers
+      // Find the audio sender via transceivers (MOST RELIABLE)
       // IMPORTANT: Do NOT fall back to addTrack - it causes renegotiation which crashes iOS
       let audioReplaced = false;
+      let targetTransceiver: any = null;
 
-      // Method 1: Try getSenders
-      const senders = (this.peerConnection as any).getSenders?.();
-      if (senders && Array.isArray(senders)) {
-        // Find sender with audio kind or null track (our silent transceiver)
-        const audioSender = senders.find((s: any) =>
-          s.track?.kind === 'audio' ||
-          (s.track === null && s._trackKind === 'audio')
-        ) || senders.find((s: any) => s.track === null); // fallback to any null track sender
+      // PRIMARY METHOD: Use getTransceivers - most reliable for targeting the correct sender
+      const transceivers = (this.peerConnection as any).getTransceivers?.();
+      if (transceivers && Array.isArray(transceivers)) {
+        console.log('[CallService] iOS PATH A: Found', transceivers.length, 'transceivers');
 
-        if (audioSender && typeof audioSender.replaceTrack === 'function') {
-          await audioSender.replaceTrack(audioTrack);
+        // For OUTGOING calls: We added the audio transceiver ourselves
+        // It will have receiver.track.kind === 'audio' and sender.track === null (initially silent)
+        // For INCOMING calls: The offer created the audio transceiver
+        // Same logic applies - find audio transceiver with null sender track
+
+        // Find audio transceiver by checking:
+        // 1. receiver.track.kind === 'audio' (standard way to identify audio transceiver)
+        // 2. mid !== null (transceiver has been negotiated in SDP)
+        for (let i = 0; i < transceivers.length; i++) {
+          const t = transceivers[i];
+          const receiverKind = t.receiver?.track?.kind;
+          const senderTrack = t.sender?.track;
+          const mid = t.mid;
+          const direction = t.direction;
+
+          console.log(`[CallService] iOS PATH A: Transceiver[${i}] - mid=${mid}, receiverKind=${receiverKind}, senderTrack=${senderTrack ? senderTrack.kind : 'null'}, direction=${direction}`);
+
+          // Target: audio transceiver that hasn't had a local track attached yet
+          if (receiverKind === 'audio' && mid !== null) {
+            targetTransceiver = t;
+            console.log(`[CallService] iOS PATH A: Selected transceiver[${i}] (mid=${mid}) as audio target`);
+            break;
+          }
+        }
+
+        // Replace track on the target transceiver's sender
+        if (targetTransceiver?.sender && typeof targetTransceiver.sender.replaceTrack === 'function') {
+          await targetTransceiver.sender.replaceTrack(audioTrack);
           audioReplaced = true;
-          console.log('[CallService] iOS PATH A: Audio track replaced via getSenders!');
+          console.log('[CallService] iOS PATH A: Audio track replaced via transceiver.sender!');
+
+          // CRITICAL: Verify and fix transceiver direction
+          // Sometimes direction can be recvonly or inactive, meaning audio won't be sent
+          if (targetTransceiver.direction !== 'sendrecv') {
+            console.warn('[CallService] iOS PATH A: Transceiver direction is', targetTransceiver.direction, '- fixing to sendrecv');
+            try {
+              targetTransceiver.direction = 'sendrecv';
+              console.log('[CallService] iOS PATH A: Transceiver direction set to sendrecv');
+            } catch (dirError) {
+              console.warn('[CallService] iOS PATH A: Could not set direction:', dirError);
+            }
+          }
+
+          // CRITICAL: Ensure track is enabled (can be disabled after route changes)
+          if (!audioTrack.enabled) {
+            console.warn('[CallService] iOS PATH A: Audio track was disabled - enabling');
+            audioTrack.enabled = true;
+          }
+          console.log('[CallService] iOS PATH A: Audio track enabled =', audioTrack.enabled);
         }
       }
 
-      // Method 2: Try getTransceivers if getSenders didn't work
+      // FALLBACK: Try getSenders if getTransceivers didn't work (older RN-WebRTC versions)
       if (!audioReplaced) {
-        console.log('[CallService] iOS PATH A: Trying getTransceivers...');
-        const transceivers = (this.peerConnection as any).getTransceivers?.();
-        if (transceivers && Array.isArray(transceivers)) {
-          // Find audio transceiver by receiver track kind or by having a sender with null track
-          const audioTransceiver = transceivers.find((t: any) =>
-            t.receiver?.track?.kind === 'audio'
-          ) || transceivers.find((t: any) =>
-            t.sender?.track === null && t.mid !== null
+        console.log('[CallService] iOS PATH A: Fallback to getSenders...');
+        const senders = (this.peerConnection as any).getSenders?.();
+        if (senders && Array.isArray(senders)) {
+          // Find sender with null track (our silent transceiver's sender)
+          const audioSender = senders.find((s: any) =>
+            s.track === null && (s._trackKind === 'audio' || !s._trackKind)
           );
 
-          if (audioTransceiver?.sender && typeof audioTransceiver.sender.replaceTrack === 'function') {
-            await audioTransceiver.sender.replaceTrack(audioTrack);
+          if (audioSender && typeof audioSender.replaceTrack === 'function') {
+            await audioSender.replaceTrack(audioTrack);
             audioReplaced = true;
-            console.log('[CallService] iOS PATH A: Audio track replaced via getTransceivers!');
+            console.log('[CallService] iOS PATH A: Audio track replaced via getSenders fallback!');
+
+            // Ensure track is enabled
+            if (!audioTrack.enabled) {
+              audioTrack.enabled = true;
+            }
           }
         }
       }
@@ -400,7 +445,15 @@ class CallService {
       if (!audioReplaced) {
         // DO NOT use addTrack as fallback - it triggers renegotiation
         console.error('[CallService] iOS PATH A: Could not find sender for replaceTrack! Audio will not work.');
-        console.error('[CallService] iOS PATH A: This should not happen - check transceiver creation');
+        console.error('[CallService] iOS PATH A: Transceivers dump:', JSON.stringify(
+          transceivers?.map((t: any, i: number) => ({
+            i,
+            mid: t.mid,
+            direction: t.direction,
+            receiverKind: t.receiver?.track?.kind,
+            senderTrack: t.sender?.track ? t.sender.track.kind : null
+          })) || 'no transceivers'
+        ));
         return;
       }
 
