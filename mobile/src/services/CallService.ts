@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { CallSession, CallState, Contact } from '../types';
 import { generateId } from '../utils/helpers';
 import { messagingService } from './MessagingService';
@@ -120,9 +121,114 @@ class CallService {
   public onHeadphoneAnswer: (() => void) | null = null;
   public onHeadphoneHangup: (() => void) | null = null;
 
+  // iOS CallKit audio session state
+  // On iOS, we MUST wait for CallKit to activate the audio session before starting audio
+  private isAudioSessionActivated: boolean = false;
+  private pendingAudioStart: { isVideo: boolean } | null = null;
+
   constructor() {
     // Set up signaling message handlers
     this.setupSignalingHandlers();
+
+    // Set up CallKit audio session callbacks (iOS only)
+    this.setupCallKitAudioCallbacks();
+  }
+
+  // Set up CallKit audio session callbacks
+  // CRITICAL: On iOS, CallKit owns the audio session. We must wait for activation.
+  private setupCallKitAudioCallbacks(): void {
+    if (Platform.OS !== 'ios') return;
+
+    // Called when CallKit activates the audio session (user answered, system ready)
+    callKeepService.onAudioSessionActivated = async () => {
+      console.log('[CallService] iOS: CallKit activated audio session');
+      this.isAudioSessionActivated = true;
+
+      // If we have a pending audio start, do it now
+      if (this.pendingAudioStart) {
+        const { isVideo } = this.pendingAudioStart;
+        this.pendingAudioStart = null;
+        await this.startAudioSessionNow(isVideo);
+      }
+    };
+
+    // Called when CallKit deactivates the audio session (call ended)
+    callKeepService.onAudioSessionDeactivated = () => {
+      console.log('[CallService] iOS: CallKit deactivated audio session');
+      this.isAudioSessionActivated = false;
+      this.pendingAudioStart = null;
+
+      // Stop InCallManager when CallKit deactivates
+      this.stopAudioSession();
+    };
+
+    console.log('[CallService] iOS: CallKit audio callbacks registered');
+  }
+
+  // Actually start the audio session (called when CallKit says it's ready on iOS, or immediately on Android)
+  private async startAudioSessionNow(isVideo: boolean): Promise<void> {
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.start({
+          media: isVideo ? 'video' : 'audio',
+          auto: true,
+          ringback: '', // No ringback - CallKit handles this on iOS
+        });
+        manager.setSpeakerphoneOn(isVideo);
+        manager.setKeepScreenOn(true);
+        console.log('[CallService] Audio session started for', isVideo ? 'video' : 'audio');
+      } catch (e) {
+        console.warn('[CallService] Failed to start audio session:', e);
+      }
+    }
+  }
+
+  // Stop the audio session
+  private async stopAudioSession(): Promise<void> {
+    const manager = await loadInCallManager();
+    if (manager) {
+      try {
+        manager.stop();
+        console.log('[CallService] Audio session stopped');
+      } catch (e) {
+        console.warn('[CallService] Failed to stop audio session:', e);
+      }
+    }
+  }
+
+  // Request audio session start - on iOS waits for CallKit, on Android starts immediately
+  private async requestAudioSessionStart(isVideo: boolean, withRingback: boolean = false): Promise<void> {
+    if (Platform.OS === 'ios') {
+      // iOS: Don't start audio directly, wait for CallKit to activate the session
+      // Store pending request so we can start when activated
+      console.log('[CallService] iOS: Audio session start requested, waiting for CallKit activation');
+      this.pendingAudioStart = { isVideo };
+
+      // If already activated (shouldn't happen but handle gracefully)
+      if (this.isAudioSessionActivated) {
+        console.log('[CallService] iOS: Audio session already activated, starting now');
+        this.pendingAudioStart = null;
+        await this.startAudioSessionNow(isVideo);
+      }
+    } else {
+      // Android: Start audio immediately, no CallKit coordination needed
+      const manager = await loadInCallManager();
+      if (manager) {
+        try {
+          manager.start({
+            media: isVideo ? 'video' : 'audio',
+            auto: true,
+            ringback: withRingback ? '_DTMF_' : '',
+          });
+          manager.setSpeakerphoneOn(isVideo);
+          manager.setKeepScreenOn(true);
+          console.log('[CallService] Android: Audio session started for', isVideo ? 'video' : 'audio');
+        } catch (e) {
+          console.warn('[CallService] Android: Failed to start audio session:', e);
+        }
+      }
+    }
   }
 
   // Set up audio event listeners for headphone button support
@@ -411,25 +517,10 @@ class CallService {
       isFrontCamera: true,
     };
 
-    // Start InCallManager for audio routing
-    const manager = await loadInCallManager();
-    if (manager) {
-      try {
-        // Start with appropriate media type
-        // - audio: enables proximity sensor (screen off when near ear), routes to earpiece
-        // - video: disables proximity, routes to speaker, keeps screen on
-        manager.start({
-          media: isVideo ? 'video' : 'audio',
-          auto: true, // Auto manage audio routing based on events (headset, etc.)
-          ringback: '_DTMF_', // Play ringback tone while calling
-        });
-        manager.setSpeakerphoneOn(isVideo); // Speaker on for video calls
-        manager.setKeepScreenOn(true); // Keep screen on during call
-        console.log('[CallService] InCallManager started for', isVideo ? 'video' : 'audio');
-      } catch (e) {
-        console.warn('[CallService] Failed to start InCallManager:', e);
-      }
-    }
+    // Request audio session start
+    // iOS: This queues the request - actual start happens when CallKit activates audio session
+    // Android: This starts immediately
+    await this.requestAudioSessionStart(isVideo, true); // withRingback=true for outgoing calls
 
     // Set up headphone button listeners
     this.setupAudioEventListeners();
@@ -509,24 +600,12 @@ class CallService {
       isFrontCamera: true,
     };
 
-    // Start InCallManager for audio routing
-    const manager = await loadInCallManager();
-    if (manager) {
-      try {
-        // Start with appropriate media type
-        // - audio: enables proximity sensor (screen off when near ear), routes to earpiece
-        // - video: disables proximity, routes to speaker, keeps screen on
-        manager.start({
-          media: isVideo ? 'video' : 'audio',
-          auto: true, // Auto manage audio routing based on events (headset, etc.)
-        });
-        manager.setSpeakerphoneOn(isVideo); // Speaker on for video calls
-        manager.setKeepScreenOn(true); // Keep screen on during call
-        console.log('[CallService] InCallManager started for incoming', isVideo ? 'video' : 'audio');
-      } catch (e) {
-        console.warn('[CallService] Failed to start InCallManager:', e);
-      }
-    }
+    // Request audio session start
+    // iOS: This queues the request - actual start happens when CallKit activates audio session
+    // Android: This starts immediately
+    // Note: For incoming calls on iOS, CallKit may have already activated the session
+    // when the user answered via the native UI, so this might start immediately
+    await this.requestAudioSessionStart(isVideo, false); // withRingback=false for incoming calls
 
     // Set up headphone button listeners
     this.setupAudioEventListeners();
@@ -798,25 +877,31 @@ class CallService {
 
   // Private: Stop ringback tone and configure for active call
   private async stopRingbackAndConfigureActiveCall(): Promise<void> {
-    const manager = await loadInCallManager();
-    if (manager) {
-      try {
-        // Stop the current InCallManager (which has ringback playing)
-        manager.stop();
+    // On iOS, ringback is handled by CallKit, so we don't need to do anything special
+    // On Android, we need to stop ringback and reconfigure
+    if (Platform.OS !== 'ios') {
+      const manager = await loadInCallManager();
+      if (manager) {
+        try {
+          // Stop the current InCallManager (which has ringback playing)
+          manager.stop();
 
-        // Restart without ringback for active call
-        const isVideo = this.currentSession?.isVideo || false;
-        manager.start({
-          media: isVideo ? 'video' : 'audio',
-          auto: true,
-          ringback: '', // No ringback for connected call
-        });
-        manager.setSpeakerphoneOn(this.currentSession?.isSpeakerOn || isVideo);
-        manager.setKeepScreenOn(true);
-        console.log('[CallService] Ringback stopped, active call mode configured');
-      } catch (e) {
-        console.warn('[CallService] Failed to reconfigure InCallManager:', e);
+          // Restart without ringback for active call
+          const isVideo = this.currentSession?.isVideo || false;
+          manager.start({
+            media: isVideo ? 'video' : 'audio',
+            auto: true,
+            ringback: '', // No ringback for connected call
+          });
+          manager.setSpeakerphoneOn(this.currentSession?.isSpeakerOn || isVideo);
+          manager.setKeepScreenOn(true);
+          console.log('[CallService] Android: Ringback stopped, active call mode configured');
+        } catch (e) {
+          console.warn('[CallService] Failed to reconfigure InCallManager:', e);
+        }
       }
+    } else {
+      console.log('[CallService] iOS: Ringback is handled by CallKit');
     }
   }
 
@@ -1377,7 +1462,17 @@ class CallService {
         }
       }
 
+      // Reset audio session state
+      this.pendingAudioStart = null;
+      // Note: isAudioSessionActivated is managed by CallKit callbacks on iOS
+      // On Android, we reset it here
+      if (Platform.OS !== 'ios') {
+        this.isAudioSessionActivated = false;
+      }
+
       // Stop InCallManager
+      // On iOS, this is also handled by onAudioSessionDeactivated callback
+      // but we call it here as a fallback for edge cases
       try {
         const manager = await loadInCallManager();
         if (manager) {
@@ -1549,6 +1644,12 @@ class CallService {
     try {
       // Mark as cleaning up to prevent concurrent operations
       this.isCleaningUp = true;
+
+      // Reset audio session state
+      this.pendingAudioStart = null;
+      if (Platform.OS !== 'ios') {
+        this.isAudioSessionActivated = false;
+      }
 
       // End all CallKeep calls
       try {
