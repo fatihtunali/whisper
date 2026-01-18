@@ -141,6 +141,10 @@ class CallService {
   // didActivateAudioSession can fire multiple times (Bluetooth, interruptions, route changes)
   private audioAttachedForCallId: string | null = null;
 
+  // iOS: Track if audio attach is allowed - set to false after didDeactivateAudioSession
+  // This prevents late audio attachment after call ends
+  private audioAttachAllowed: boolean = false;
+
   constructor() {
     // Set up signaling message handlers
     this.setupSignalingHandlers();
@@ -161,34 +165,39 @@ class CallService {
     callKeepService.onAudioSessionActivated = async () => {
       console.log('[CallService] iOS: CallKit activated audio session');
       this.isAudioSessionActivated = true;
+      this.audioAttachAllowed = true; // Audio attach is now allowed
 
       // PATH A: If we have pending audio track to add, do it now
       if (this.pendingAudioTrackAdd) {
         const { callId, isVideo, createdAt } = this.pendingAudioTrackAdd;
 
+        // CRITICAL: Consume pending FIRST to prevent double resolution
+        this.pendingAudioTrackAdd = null;
+
         // Validate this is for the current session
         if (!this.currentSession || this.currentSession.callId !== callId) {
           console.warn('[CallService] iOS PATH A: Pending audio is for different/stale call, ignoring');
-          this.pendingAudioTrackAdd = null;
+          return;
+        }
+
+        // Check session state - don't attach if call is ending/ended
+        if (this.currentSession.state === 'ended') {
+          console.warn('[CallService] iOS PATH A: Session already ended, skipping audio attach');
           return;
         }
 
         // Check idempotency - prevent double replaceTrack
         if (this.audioAttachedForCallId === callId) {
           console.log('[CallService] iOS PATH A: Audio already attached for this call, skipping');
-          this.pendingAudioTrackAdd = null;
           return;
         }
 
         // Check for stale pending (older than 30 seconds)
         if (Date.now() - createdAt > 30000) {
           console.warn('[CallService] iOS PATH A: Pending audio is stale (>30s), ignoring');
-          this.pendingAudioTrackAdd = null;
           return;
         }
 
-        // Consume the pending - only once
-        this.pendingAudioTrackAdd = null;
         console.log('[CallService] iOS PATH A: Adding audio track after CallKit activation');
         await this.addAudioTrackAfterActivation(callId, isVideo);
         return;
@@ -203,10 +212,13 @@ class CallService {
     };
 
     // Called when CallKit deactivates the audio session (call ended)
+    // CRITICAL: After this, audio attach is FORBIDDEN
     callKeepService.onAudioSessionDeactivated = () => {
       console.log('[CallService] iOS: CallKit deactivated audio session');
       this.isAudioSessionActivated = false;
+      this.audioAttachAllowed = false; // CRITICAL: Prevent late audio attachment
       this.pendingAudioStart = null;
+      this.pendingAudioTrackAdd = null; // Clear any pending - too late now
 
       // Stop InCallManager when CallKit deactivates
       this.stopAudioSession();
@@ -263,6 +275,12 @@ class CallService {
   private async addAudioTrackAfterActivation(callId: string, isVideo: boolean): Promise<void> {
     console.log('[CallService] iOS PATH A: addAudioTrackAfterActivation for callId:', callId);
 
+    // CRITICAL: Check if audio attach is allowed (false after didDeactivateAudioSession)
+    if (!this.audioAttachAllowed) {
+      console.warn('[CallService] iOS PATH A: Audio attach not allowed (deactivated), skipping');
+      return;
+    }
+
     // Idempotency check - prevent double audio attachment
     if (this.audioAttachedForCallId === callId) {
       console.log('[CallService] iOS PATH A: Audio already attached for this call, skipping');
@@ -276,6 +294,12 @@ class CallService {
 
     if (!this.currentSession || this.currentSession.callId !== callId) {
       console.warn('[CallService] iOS PATH A: Session mismatch, aborting audio attachment');
+      return;
+    }
+
+    // Check session state - don't attach if call is ending/ended
+    if (this.currentSession.state === 'ended') {
+      console.warn('[CallService] iOS PATH A: Session ended, aborting audio attachment');
       return;
     }
 
@@ -301,9 +325,21 @@ class CallService {
       console.log('[CallService] iOS PATH A: Waiting for audio route to stabilize...');
       await new Promise(resolve => setTimeout(resolve, 80));
 
-      // Double-check session is still valid after delay
+      // Double-check all conditions after delay - things can change!
       if (!this.currentSession || this.currentSession.callId !== callId) {
         console.warn('[CallService] iOS PATH A: Session changed during delay, aborting');
+        return;
+      }
+      if (!this.audioAttachAllowed) {
+        console.warn('[CallService] iOS PATH A: Audio attach disallowed during delay, aborting');
+        return;
+      }
+      if (this.currentSession.state === 'ended') {
+        console.warn('[CallService] iOS PATH A: Session ended during delay, aborting');
+        return;
+      }
+      if (this.audioAttachedForCallId === callId) {
+        console.warn('[CallService] iOS PATH A: Audio already attached during delay, aborting');
         return;
       }
 
@@ -1848,9 +1884,10 @@ class CallService {
       this.pendingAudioStart = null;
       this.audioState = 'idle';
       this.audioStartedForCallId = null;
-      // Reset iOS PATH A state
+      // Reset iOS PATH A state - CRITICAL: prevent ghost audio attach
       this.pendingAudioTrackAdd = null;
       this.audioAttachedForCallId = null;
+      this.audioAttachAllowed = false;
       // Note: isAudioSessionActivated is managed by CallKit callbacks on iOS
       // On Android, we reset it here
       if (Platform.OS !== 'ios') {
@@ -2036,9 +2073,10 @@ class CallService {
       this.pendingAudioStart = null;
       this.audioState = 'idle';
       this.audioStartedForCallId = null;
-      // Reset iOS PATH A state
+      // Reset iOS PATH A state - CRITICAL: prevent ghost audio attach
       this.pendingAudioTrackAdd = null;
       this.audioAttachedForCallId = null;
+      this.audioAttachAllowed = false;
       if (Platform.OS !== 'ios') {
         this.isAudioSessionActivated = false;
       }
