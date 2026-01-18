@@ -2,7 +2,7 @@
   "expo": {
     "name": "Whisper",
     "slug": "whisper",
-    "version": "1.1.0",
+    "version": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sarjmobile.whisper",
-      "buildNumber": "70",
+      "buildNumber": "1",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "Whisper needs camera access to scan QR codes when adding contacts and to enable video calls with your contacts.",
@@ -41,7 +41,7 @@
       "edgeToEdgeEnabled": false,
       "softwareKeyboardLayoutMode": "pan",
       "package": "com.sarjmobile.whisper",
-      "versionCode": 70,
+      "versionCode": 1,
       "permissions": [
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
@@ -73,6 +73,7 @@
       "./plugins/withHermesBuildPhase.js",
       "./plugins/withCallKeepMainQueue.js",
       "./plugins/withInCallManagerMainQueue.js",
+      "./plugins/withCallIdValidation.js",
       "expo-asset"
     ]
   }
