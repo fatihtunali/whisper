@@ -239,19 +239,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }, 500); // Longer delay for cold-start
         };
 
-        // iOS: Handle audio session activation/deactivation from CallKit
-        // This is CRITICAL when RTCAudioSession.useManualAudio = true (set in native code)
-        if (Platform.OS === 'ios') {
-          callKeepService.onAudioSessionActivated = () => {
-            console.log('[AuthContext] CallKit audio session activated - WebRTC audio should now work');
-            // The native RTCAudioSession handles this automatically via the CXProviderDelegate
-            // that RNCallKeep implements. We just log it here for debugging.
-          };
-
-          callKeepService.onAudioSessionDeactivated = () => {
-            console.log('[AuthContext] CallKit audio session deactivated');
-          };
-        }
+        // iOS: Audio session activation/deactivation is handled by CallService
+        // DO NOT set callbacks here - CallService.setupCallKitAudioCallbacks() handles this
+        // Setting them here would overwrite the CallService's audio session management!
+        // See CallService.ts for the actual implementation
 
         // CRITICAL: Delay markHandlersReady until WebSocket is likely connected
         // This prevents race condition where cold-start events are processed
@@ -308,8 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         callKeepService.onAnswerCall = null;
         callKeepService.onEndCall = null;
         callKeepService.onColdStartIncomingCall = null;
-        callKeepService.onAudioSessionActivated = null;
-        callKeepService.onAudioSessionDeactivated = null;
+        // Note: Audio session callbacks are managed by CallService, not here
       };
     }
   }, [user]);
