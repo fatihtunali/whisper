@@ -131,11 +131,17 @@ class CallService {
   private audioState: 'idle' | 'starting' | 'started' | 'stopping' = 'idle';
   private audioStartedForCallId: string | null = null;
 
-  // iOS Path A: Track if we need to add audio after CallKit activates
-  // The SDP is created immediately with silent audio transceiver
-  // Audio capture + replaceTrack happens after didActivateAudioSession
-  // IMPORTANT: callId-based to prevent ghost states from previous calls
-  private pendingAudioTrackAdd: { callId: string; isVideo: boolean; createdAt: number } | null = null;
+  // iOS: Pending call setup - we delay ALL WebRTC setup until CallKit activates audio session
+  // On iOS 26, calling addTransceiver('audio') before audio session activation crashes
+  // So we store the call info and do the entire setup after didActivateAudioSession
+  private pendingCallSetup: {
+    callId: string;
+    contactId: string;
+    isVideo: boolean;
+    isIncoming: boolean;
+    remoteSdp?: string; // For incoming calls
+    createdAt: number;
+  } | null = null;
 
   // iOS: Track if audio has been attached to prevent double replaceTrack
   // didActivateAudioSession can fire multiple times (Bluetooth, interruptions, route changes)
@@ -159,47 +165,46 @@ class CallService {
     if (Platform.OS !== 'ios') return;
 
     // Called when CallKit activates the audio session (user answered, system ready)
-    // PATH A: SDP already sent with silent audio transceiver
-    // Now we capture audio and use replaceTrack to add it
+    // iOS 26 FIX: We delay ALL WebRTC setup until this callback fires
+    // This prevents crashes from calling addTransceiver('audio') before audio session activation
     // NOTE: This can fire multiple times (Bluetooth, interruptions, route changes)
     callKeepService.onAudioSessionActivated = async () => {
       console.log('[CallService] iOS: CallKit activated audio session');
       this.isAudioSessionActivated = true;
       this.audioAttachAllowed = true; // Audio attach is now allowed
 
-      // PATH A: If we have pending audio track to add, do it now
-      if (this.pendingAudioTrackAdd) {
-        const { callId, isVideo, createdAt } = this.pendingAudioTrackAdd;
+      // iOS 26 FIX: Complete pending call setup now that audio session is activated
+      if (this.pendingCallSetup) {
+        const { callId, contactId, isVideo, isIncoming, remoteSdp, createdAt } = this.pendingCallSetup;
 
         // CRITICAL: Consume pending FIRST to prevent double resolution
-        this.pendingAudioTrackAdd = null;
+        this.pendingCallSetup = null;
 
         // Validate this is for the current session
         if (!this.currentSession || this.currentSession.callId !== callId) {
-          console.warn('[CallService] iOS PATH A: Pending audio is for different/stale call, ignoring');
+          console.warn('[CallService] iOS: Pending call setup is for different/stale call, ignoring');
           return;
         }
 
-        // Check session state - don't attach if call is ending/ended
+        // Check session state - don't proceed if call is ending/ended
         if (this.currentSession.state === 'ended') {
-          console.warn('[CallService] iOS PATH A: Session already ended, skipping audio attach');
-          return;
-        }
-
-        // Check idempotency - prevent double replaceTrack
-        if (this.audioAttachedForCallId === callId) {
-          console.log('[CallService] iOS PATH A: Audio already attached for this call, skipping');
+          console.warn('[CallService] iOS: Session already ended, skipping call setup');
           return;
         }
 
         // Check for stale pending (older than 30 seconds)
         if (Date.now() - createdAt > 30000) {
-          console.warn('[CallService] iOS PATH A: Pending audio is stale (>30s), ignoring');
+          console.warn('[CallService] iOS: Pending call setup is stale (>30s), ignoring');
           return;
         }
 
-        console.log('[CallService] iOS PATH A: Adding audio track after CallKit activation');
-        await this.addAudioTrackAfterActivation(callId, isVideo);
+        console.log('[CallService] iOS: Completing call setup after audio activation - isIncoming:', isIncoming);
+
+        if (isIncoming) {
+          await this.completeIncomingCallSetup(callId, contactId, isVideo, remoteSdp!);
+        } else {
+          await this.completeOutgoingCallSetup(callId, contactId, isVideo);
+        }
         return;
       }
 
@@ -212,13 +217,13 @@ class CallService {
     };
 
     // Called when CallKit deactivates the audio session (call ended)
-    // CRITICAL: After this, audio attach is FORBIDDEN
+    // CRITICAL: After this, WebRTC audio operations are FORBIDDEN
     callKeepService.onAudioSessionDeactivated = () => {
       console.log('[CallService] iOS: CallKit deactivated audio session');
       this.isAudioSessionActivated = false;
       this.audioAttachAllowed = false; // CRITICAL: Prevent late audio attachment
       this.pendingAudioStart = null;
-      this.pendingAudioTrackAdd = null; // Clear any pending - too late now
+      this.pendingCallSetup = null; // Clear any pending - too late now
 
       // Stop InCallManager when CallKit deactivates
       this.stopAudioSession();
@@ -500,6 +505,216 @@ class CallService {
 
     this.audioState = 'idle';
     this.audioStartedForCallId = null;
+  }
+
+  // iOS 26 FIX: Complete outgoing call setup AFTER audio session activation
+  // This is called from onAudioSessionActivated when we have a pending outgoing call
+  private async completeOutgoingCallSetup(callId: string, contactId: string, isVideo: boolean): Promise<void> {
+    console.log('[CallService] iOS: completeOutgoingCallSetup for callId:', callId);
+
+    // Validate session still exists and matches
+    if (!this.currentSession || this.currentSession.callId !== callId) {
+      console.warn('[CallService] iOS: Session mismatch in completeOutgoingCallSetup');
+      return;
+    }
+
+    if (this.currentSession.state === 'ended') {
+      console.warn('[CallService] iOS: Session ended before outgoing setup could complete');
+      return;
+    }
+
+    try {
+      // Start InCallManager for speaker/proximity
+      const manager = await loadInCallManager();
+      if (manager) {
+        try {
+          manager.start({ media: isVideo ? 'video' : 'audio', auto: true, ringback: '' });
+          manager.setSpeakerphoneOn(isVideo);
+          manager.setKeepScreenOn(true);
+          console.log('[CallService] iOS: InCallManager started for outgoing call');
+        } catch (e) {
+          console.warn('[CallService] iOS: Failed to start InCallManager:', e);
+        }
+      }
+
+      this.audioState = 'started';
+      this.audioStartedForCallId = callId;
+
+      // Small delay for audio route stabilization
+      await new Promise(resolve => setTimeout(resolve, 80));
+
+      // Re-validate after delay
+      if (!this.currentSession || this.currentSession.callId !== callId || this.currentSession.state === 'ended') {
+        console.warn('[CallService] iOS: Session changed during outgoing setup delay');
+        return;
+      }
+
+      // 1. Create peer connection (NOW it's safe to add audio transceiver)
+      console.log('[CallService] iOS: Creating peer connection after audio activation');
+      await this.createPeerConnection();
+
+      // 2. Capture audio and video (if video call)
+      const { mediaDevices } = await import('react-native-webrtc');
+
+      if (isVideo) {
+        console.log('[CallService] iOS: Capturing audio + video for video call');
+        const stream = await mediaDevices.getUserMedia({
+          audio: true,
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        this.localStream = stream as unknown as MediaStream;
+
+        // Add all tracks
+        const tracks = (stream as any).getTracks();
+        tracks.forEach((track: any) => {
+          this.peerConnection!.addTrack(track, stream as any);
+        });
+        console.log('[CallService] iOS: Added', tracks.length, 'tracks to peer connection');
+      } else {
+        console.log('[CallService] iOS: Capturing audio for voice call');
+        const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+        this.localStream = stream as unknown as MediaStream;
+
+        const audioTrack = (stream as any).getAudioTracks()[0];
+        if (audioTrack && this.peerConnection) {
+          this.peerConnection.addTrack(audioTrack, stream as any);
+          console.log('[CallService] iOS: Audio track added');
+        }
+      }
+
+      this.audioAttachedForCallId = callId;
+
+      // 3. Create and send offer
+      console.log('[CallService] iOS: Creating SDP offer');
+      const offer = await this.peerConnection!.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: isVideo,
+      });
+      await this.peerConnection!.setLocalDescription(offer);
+      console.log('[CallService] iOS: Local description set');
+
+      // 4. Send offer
+      console.log('[CallService] iOS: Sending call_offer');
+      this.sendSignalingMessage(contactId, {
+        type: 'call_offer',
+        callId,
+        sdp: offer.sdp,
+        isVideo,
+      });
+
+      console.log('[CallService] iOS: Outgoing call setup complete');
+    } catch (error) {
+      console.error('[CallService] iOS: Failed to complete outgoing call setup:', error);
+      await this.endCall();
+    }
+  }
+
+  // iOS 26 FIX: Complete incoming call setup AFTER audio session activation
+  // This is called from onAudioSessionActivated when we have a pending incoming call
+  private async completeIncomingCallSetup(callId: string, contactId: string, isVideo: boolean, remoteSdp: string): Promise<void> {
+    console.log('[CallService] iOS: completeIncomingCallSetup for callId:', callId);
+
+    // Validate session still exists and matches
+    if (!this.currentSession || this.currentSession.callId !== callId) {
+      console.warn('[CallService] iOS: Session mismatch in completeIncomingCallSetup');
+      return;
+    }
+
+    if (this.currentSession.state === 'ended') {
+      console.warn('[CallService] iOS: Session ended before incoming setup could complete');
+      return;
+    }
+
+    try {
+      // Start InCallManager for speaker/proximity
+      const manager = await loadInCallManager();
+      if (manager) {
+        try {
+          manager.start({ media: isVideo ? 'video' : 'audio', auto: true, ringback: '' });
+          manager.setSpeakerphoneOn(isVideo);
+          manager.setKeepScreenOn(true);
+          console.log('[CallService] iOS: InCallManager started for incoming call');
+        } catch (e) {
+          console.warn('[CallService] iOS: Failed to start InCallManager:', e);
+        }
+      }
+
+      this.audioState = 'started';
+      this.audioStartedForCallId = callId;
+
+      // Small delay for audio route stabilization
+      await new Promise(resolve => setTimeout(resolve, 80));
+
+      // Re-validate after delay
+      if (!this.currentSession || this.currentSession.callId !== callId || this.currentSession.state === 'ended') {
+        console.warn('[CallService] iOS: Session changed during incoming setup delay');
+        return;
+      }
+
+      // 1. Create peer connection (NOW it's safe - audio session is active)
+      console.log('[CallService] iOS: Creating peer connection after audio activation');
+      await this.createPeerConnection();
+
+      // 2. Set remote description (the offer)
+      console.log('[CallService] iOS: Setting remote description');
+      await this.peerConnection!.setRemoteDescription({
+        type: 'offer',
+        sdp: remoteSdp,
+      });
+
+      // 3. Process pending ICE candidates
+      await this.processPendingIceCandidates();
+
+      // 4. Capture audio and video (if video call)
+      const { mediaDevices } = await import('react-native-webrtc');
+
+      if (isVideo) {
+        console.log('[CallService] iOS: Capturing audio + video for video call');
+        const stream = await mediaDevices.getUserMedia({
+          audio: true,
+          video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        this.localStream = stream as unknown as MediaStream;
+
+        // Add all tracks
+        const tracks = (stream as any).getTracks();
+        tracks.forEach((track: any) => {
+          this.peerConnection!.addTrack(track, stream as any);
+        });
+        console.log('[CallService] iOS: Added', tracks.length, 'tracks to peer connection');
+      } else {
+        console.log('[CallService] iOS: Capturing audio for voice call');
+        const stream = await mediaDevices.getUserMedia({ audio: true, video: false });
+        this.localStream = stream as unknown as MediaStream;
+
+        const audioTrack = (stream as any).getAudioTracks()[0];
+        if (audioTrack && this.peerConnection) {
+          this.peerConnection.addTrack(audioTrack, stream as any);
+          console.log('[CallService] iOS: Audio track added');
+        }
+      }
+
+      this.audioAttachedForCallId = callId;
+
+      // 5. Create and send answer
+      console.log('[CallService] iOS: Creating SDP answer');
+      const answer = await this.peerConnection!.createAnswer();
+      await this.peerConnection!.setLocalDescription(answer);
+      console.log('[CallService] iOS: Local description set');
+
+      // 6. Send answer
+      console.log('[CallService] iOS: Sending call_answer');
+      this.sendSignalingMessage(contactId, {
+        type: 'call_answer',
+        callId,
+        sdp: answer.sdp,
+      });
+
+      console.log('[CallService] iOS: Incoming call setup complete');
+    } catch (error) {
+      console.error('[CallService] iOS: Failed to complete incoming call setup:', error);
+      await this.endCall();
+    }
   }
 
   // Request audio session start - on iOS waits for CallKit, on Android starts immediately
@@ -849,61 +1064,36 @@ class CallService {
 
     this.notifyStateChange('calling');
 
-    // iOS PATH A: Create offer immediately with silent audio transceiver
-    // Audio capture + replaceTrack happens after didActivateAudioSession
+    // iOS 26 FIX: Delay ALL WebRTC setup until CallKit activates audio session
+    // Calling addTransceiver('audio') before audio session activation crashes on iOS 26
     if (Platform.OS === 'ios') {
-      console.log('[CallService] iOS PATH A: Starting outgoing call');
+      console.log('[CallService] iOS: Starting outgoing call - waiting for audio activation');
 
       try {
-        // 1. Register with CallKit first
-        console.log('[CallService] iOS PATH A: Registering with CallKit');
+        // 1. Register with CallKit ONLY - this triggers audio session activation
+        console.log('[CallService] iOS: Registering with CallKit');
         await callKeepService.startCall(callId, callerName, contact.whisperId, isVideo);
 
-        // 2. Create peer connection (includes audio transceiver)
-        console.log('[CallService] iOS PATH A: Creating peer connection');
-        await this.createPeerConnection();
-
-        // 3. For video calls, capture video ONLY (no audio yet)
-        if (isVideo) {
-          console.log('[CallService] iOS PATH A: Capturing video for video call');
-          const { mediaDevices } = await import('react-native-webrtc');
-          const videoStream = await mediaDevices.getUserMedia({
-            audio: false,
-            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-          });
-          this.localStream = videoStream as unknown as MediaStream;
-          const videoTrack = (videoStream as any).getVideoTracks()[0];
-          if (videoTrack && this.peerConnection) {
-            this.peerConnection.addTrack(videoTrack, videoStream as any);
-            console.log('[CallService] iOS PATH A: Video track added');
-          }
-        }
-
-        // 4. Create offer immediately (audio m-line from transceiver, silent)
-        console.log('[CallService] iOS PATH A: Creating SDP offer');
-        const offer = await this.peerConnection!.createOffer({
-          offerToReceiveAudio: true,
-          offerToReceiveVideo: isVideo,
-        });
-        await this.peerConnection!.setLocalDescription(offer);
-        console.log('[CallService] iOS PATH A: Local description set');
-
-        // 5. Send offer
-        console.log('[CallService] iOS PATH A: Sending call_offer');
-        this.sendSignalingMessage(contact.whisperId, {
-          type: 'call_offer',
+        // 2. Store pending call setup - WebRTC setup happens after audio activation
+        this.pendingCallSetup = {
           callId,
-          sdp: offer.sdp,
+          contactId: contact.whisperId,
           isVideo,
-        });
+          isIncoming: false,
+          createdAt: Date.now(),
+        };
+        console.log('[CallService] iOS: Call registered with CallKit, waiting for audio activation');
 
-        // 6. Mark that we need to add audio when CallKit activates
-        this.pendingAudioTrackAdd = { callId, isVideo, createdAt: Date.now() };
-        console.log('[CallService] iOS PATH A: Offer sent, waiting for audio activation');
+        // If audio session is already activated (edge case), complete setup now
+        if (this.isAudioSessionActivated) {
+          console.log('[CallService] iOS: Audio already activated, completing setup now');
+          this.pendingCallSetup = null;
+          await this.completeOutgoingCallSetup(callId, contact.whisperId, isVideo);
+        }
 
         return callId;
       } catch (error) {
-        console.error('[CallService] iOS PATH A: Failed to start call:', error);
+        console.error('[CallService] iOS: Failed to start call:', error);
         await this.endCall();
         throw error;
       }
@@ -990,71 +1180,28 @@ class CallService {
 
     this.notifyStateChange('connecting');
 
-    // iOS PATH A: Create answer immediately with silent audio
-    // Audio capture + replaceTrack happens after didActivateAudioSession
+    // iOS 26 FIX: Delay ALL WebRTC setup until CallKit activates audio session
+    // Setting remote description also creates transceivers which can crash before activation
     if (Platform.OS === 'ios') {
-      console.log('[CallService] iOS PATH A: Accepting incoming call');
+      console.log('[CallService] iOS: Accepting incoming call - checking audio activation');
 
-      try {
-        // 1. Create peer connection (no transceiver needed - offer has audio)
-        console.log('[CallService] iOS PATH A: Creating peer connection');
-        await this.createPeerConnection();
+      // Store pending call setup with remote SDP
+      this.pendingCallSetup = {
+        callId,
+        contactId,
+        isVideo,
+        isIncoming: true,
+        remoteSdp,
+        createdAt: Date.now(),
+      };
 
-        // 2. For video calls, capture video ONLY (no audio yet)
-        if (isVideo) {
-          console.log('[CallService] iOS PATH A: Capturing video for video call');
-          const { mediaDevices } = await import('react-native-webrtc');
-          const videoStream = await mediaDevices.getUserMedia({
-            audio: false,
-            video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-          });
-          this.localStream = videoStream as unknown as MediaStream;
-          const videoTrack = (videoStream as any).getVideoTracks()[0];
-          if (videoTrack && this.peerConnection) {
-            this.peerConnection.addTrack(videoTrack, videoStream as any);
-            console.log('[CallService] iOS PATH A: Video track added');
-          }
-        }
-
-        // 3. Set remote description (offer) - this creates audio transceiver from offer
-        console.log('[CallService] iOS PATH A: Setting remote description');
-        await this.peerConnection!.setRemoteDescription({
-          type: 'offer',
-          sdp: remoteSdp,
-        });
-
-        // 4. Process pending ICE candidates
-        await this.processPendingIceCandidates();
-
-        // 5. Create answer immediately
-        console.log('[CallService] iOS PATH A: Creating SDP answer');
-        const answer = await this.peerConnection!.createAnswer();
-        await this.peerConnection!.setLocalDescription(answer);
-        console.log('[CallService] iOS PATH A: Local description set');
-
-        // 6. Send answer
-        console.log('[CallService] iOS PATH A: Sending call_answer');
-        this.sendSignalingMessage(contactId, {
-          type: 'call_answer',
-          callId,
-          sdp: answer.sdp,
-        });
-
-        // 7. Mark that we need to add audio when CallKit activates
-        // If audio session is already activated, add immediately
-        if (this.isAudioSessionActivated) {
-          console.log('[CallService] iOS PATH A: Audio already activated, adding track now');
-          await this.addAudioTrackAfterActivation(callId, isVideo);
-        } else {
-          this.pendingAudioTrackAdd = { callId, isVideo, createdAt: Date.now() };
-          console.log('[CallService] iOS PATH A: Answer sent, waiting for audio activation');
-        }
-
-        console.log('[CallService] iOS PATH A: Incoming call accepted');
-      } catch (error) {
-        console.error('[CallService] iOS PATH A: Failed to accept call:', error);
-        await this.endCall();
-        throw error;
+      // If audio session is already activated (user answered via CallKit UI), complete setup now
+      if (this.isAudioSessionActivated) {
+        console.log('[CallService] iOS: Audio already activated, completing setup now');
+        this.pendingCallSetup = null;
+        await this.completeIncomingCallSetup(callId, contactId, isVideo, remoteSdp);
+      } else {
+        console.log('[CallService] iOS: Waiting for audio activation before WebRTC setup');
       }
       return;
     }
@@ -1938,7 +2085,7 @@ class CallService {
       this.audioState = 'idle';
       this.audioStartedForCallId = null;
       // Reset iOS PATH A state - CRITICAL: prevent ghost audio attach
-      this.pendingAudioTrackAdd = null;
+      this.pendingCallSetup = null;
       this.audioAttachedForCallId = null;
       this.audioAttachAllowed = false;
       // Note: isAudioSessionActivated is managed by CallKit callbacks on iOS
@@ -2127,7 +2274,7 @@ class CallService {
       this.audioState = 'idle';
       this.audioStartedForCallId = null;
       // Reset iOS PATH A state - CRITICAL: prevent ghost audio attach
-      this.pendingAudioTrackAdd = null;
+      this.pendingCallSetup = null;
       this.audioAttachedForCallId = null;
       this.audioAttachAllowed = false;
       if (Platform.OS !== 'ios') {
