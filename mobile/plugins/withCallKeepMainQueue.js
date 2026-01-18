@@ -54,29 +54,37 @@ function withCallKeepMainQueue(config) {
         return config;
       }
 
-      // Find the @implementation RNCallKeep line and add methodQueue after it
-      const implementationPattern = /@implementation\s+RNCallKeep/;
-      const match = content.match(implementationPattern);
-
-      if (!match) {
-        console.warn('[withCallKeepMainQueue] Could not find @implementation RNCallKeep, skipping patch');
-        return config;
-      }
-
-      // Check if methodQueue already exists (in any form)
+      // Check if methodQueue already exists
       if (content.includes('- (dispatch_queue_t)methodQueue')) {
         console.log('[withCallKeepMainQueue] methodQueue already exists, checking if it returns main queue');
-
-        // If it exists but doesn't return main queue, we need to patch it
-        // This is complex, so let's just warn and skip for now
         if (!content.includes('dispatch_get_main_queue()')) {
           console.warn('[withCallKeepMainQueue] methodQueue exists but does not use main queue - manual patch required');
         }
         return config;
       }
 
-      // Insert methodQueue method after @implementation
+      // Find a safe insertion point - look for the first method definition after @implementation
+      // Methods start with - or + followed by space and (
+      // We need to insert BEFORE the first method, but AFTER any instance variable block { }
+
+      const implementationMatch = content.match(/@implementation\s+RNCallKeep/);
+      if (!implementationMatch) {
+        console.warn('[withCallKeepMainQueue] Could not find @implementation RNCallKeep, skipping patch');
+        return config;
+      }
+
+      const implIndex = implementationMatch.index + implementationMatch[0].length;
+      const afterImpl = content.slice(implIndex);
+
+      // Find the first method (starts with - or + at beginning of line, followed by space/paren)
+      const firstMethodMatch = afterImpl.match(/\n[-+]\s*\(/);
+      if (!firstMethodMatch) {
+        console.warn('[withCallKeepMainQueue] Could not find first method in RNCallKeep, skipping patch');
+        return config;
+      }
+
       const methodQueueCode = `
+
 // PATCHED BY withCallKeepMainQueue.js
 // Force all RNCallKeep methods to run on main queue to prevent UIKit crashes
 - (dispatch_queue_t)methodQueue {
@@ -84,8 +92,9 @@ function withCallKeepMainQueue(config) {
 }
 `;
 
-      const insertPosition = match.index + match[0].length;
-      content = content.slice(0, insertPosition) + '\n' + methodQueueCode + content.slice(insertPosition);
+      // Insert right before the first method
+      const insertPosition = implIndex + firstMethodMatch.index;
+      content = content.slice(0, insertPosition) + methodQueueCode + content.slice(insertPosition);
 
       fs.writeFileSync(targetFile, content);
       console.log('[withCallKeepMainQueue] Successfully patched RNCallKeep to use main queue');

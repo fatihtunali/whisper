@@ -46,23 +46,31 @@ function withInCallManagerMainQueue(config) {
         return config;
       }
 
-      // Find the @implementation line
-      const implementationPattern = /@implementation\s+\w*InCallManager/;
-      const match = content.match(implementationPattern);
-
-      if (!match) {
-        console.warn('[withInCallManagerMainQueue] Could not find @implementation, skipping patch');
-        return config;
-      }
-
       // Check if methodQueue already exists
       if (content.includes('- (dispatch_queue_t)methodQueue')) {
         console.log('[withInCallManagerMainQueue] methodQueue already exists, skipping');
         return config;
       }
 
-      // Insert methodQueue method after @implementation
+      // Find the @implementation line
+      const implementationMatch = content.match(/@implementation\s+\w*InCallManager/);
+      if (!implementationMatch) {
+        console.warn('[withInCallManagerMainQueue] Could not find @implementation, skipping patch');
+        return config;
+      }
+
+      const implIndex = implementationMatch.index + implementationMatch[0].length;
+      const afterImpl = content.slice(implIndex);
+
+      // Find the first method (starts with - or + at beginning of line, followed by space/paren)
+      const firstMethodMatch = afterImpl.match(/\n[-+]\s*\(/);
+      if (!firstMethodMatch) {
+        console.warn('[withInCallManagerMainQueue] Could not find first method, skipping patch');
+        return config;
+      }
+
       const methodQueueCode = `
+
 // PATCHED BY withInCallManagerMainQueue.js
 // Force all InCallManager methods to run on main queue
 - (dispatch_queue_t)methodQueue {
@@ -70,8 +78,9 @@ function withInCallManagerMainQueue(config) {
 }
 `;
 
-      const insertPosition = match.index + match[0].length;
-      content = content.slice(0, insertPosition) + '\n' + methodQueueCode + content.slice(insertPosition);
+      // Insert right before the first method
+      const insertPosition = implIndex + firstMethodMatch.index;
+      content = content.slice(0, insertPosition) + methodQueueCode + content.slice(insertPosition);
 
       fs.writeFileSync(targetFile, content);
       console.log('[withInCallManagerMainQueue] Successfully patched InCallManager to use main queue');
